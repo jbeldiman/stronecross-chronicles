@@ -24,6 +24,7 @@ type EncounterState = {
 };
 
 const STORAGE_KEY = "stonecross.combat.v1";
+const AUTH_SESSION_KEY = "stonecross.session.v1";
 
 function uid() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
@@ -40,7 +41,7 @@ function safeInt(v: string, fallback: number) {
 
 function loadEncounter(): EncounterState {
   if (typeof window === "undefined") {
-    return { round: 1, turnIndex: 0, combatants: [], lastUpdatedAt: new Date().toISOString() };
+    return { round: 1, turnIndex: 0, combatants: [], lastUpdatedAt: "" };
   }
 
   try {
@@ -64,10 +65,10 @@ function loadEncounter(): EncounterState {
         conditions: Array.isArray(c.conditions) ? c.conditions.filter((s) => typeof s === "string") : [],
         notes: typeof c.notes === "string" ? c.notes : "",
       })),
-      lastUpdatedAt: typeof parsed.lastUpdatedAt === "string" ? parsed.lastUpdatedAt : new Date().toISOString(),
+      lastUpdatedAt: typeof parsed.lastUpdatedAt === "string" ? parsed.lastUpdatedAt : "",
     };
   } catch {
-    return { round: 1, turnIndex: 0, combatants: [], lastUpdatedAt: new Date().toISOString() };
+    return { round: 1, turnIndex: 0, combatants: [], lastUpdatedAt: "" };
   }
 }
 
@@ -85,17 +86,31 @@ function sortByInitiativeDesc(list: Combatant[]) {
   });
 }
 
-export default function CombatPage() {
-  // ✅ FIX: hydrate via lazy initializer (no setState in effect)
-  const [state, setState] = useState<EncounterState>(() => {
-    const loaded = loadEncounter();
-    return { ...loaded, combatants: sortByInitiativeDesc(loaded.combatants) };
-  });
+function getRoleFromLocalStorage(): "dm" | "player" {
+  try {
+    const raw = localStorage.getItem(AUTH_SESSION_KEY);
+    if (!raw) return "player";
+    const parsed = JSON.parse(raw);
+    return parsed?.username === "jbeldiman" ? "dm" : "player";
+  } catch {
+    return "player";
+  }
+}
 
-  // ✅ FIX: avoid saving immediately on first render
+export default function CombatPage() {
+  const [isClient, setIsClient] = useState(false);
+  const [role, setRole] = useState<"dm" | "player">("player");
+  const isDm = role === "dm";
+
+  const [state, setState] = useState<EncounterState>(() => ({
+    round: 1,
+    turnIndex: 0,
+    combatants: [],
+    lastUpdatedAt: "",
+  }));
+
   const hasHydrated = useRef(false);
 
-  // Add combatant form
   const [name, setName] = useState("");
   const [kind, setKind] = useState<CombatantType>("Monster");
   const [initiative, setInitiative] = useState("");
@@ -108,19 +123,29 @@ export default function CombatPage() {
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    setIsClient(true);
+    setRole(getRoleFromLocalStorage());
+
+    const loaded = loadEncounter();
+    setState({ ...loaded, combatants: sortByInitiativeDesc(loaded.combatants) });
+  }, []);
+
+  useEffect(() => {
+    if (!isClient) return;
     if (!hasHydrated.current) {
       hasHydrated.current = true;
       return;
     }
+    if (!isDm) return;
     saveEncounter(state);
-  }, [state]);
+  }, [state, isDm, isClient]);
 
   const ordered = useMemo(() => sortByInitiativeDesc(state.combatants), [state.combatants]);
-  const active = ordered.length
-    ? ordered[clamp(state.turnIndex, 0, Math.max(ordered.length - 1, 0))]
-    : null;
+  const active = ordered.length ? ordered[clamp(state.turnIndex, 0, Math.max(ordered.length - 1, 0))] : null;
 
   function setOrdered(next: Combatant[], preserveActiveId?: string) {
+    if (!isDm) return;
+
     const sorted = sortByInitiativeDesc(next);
     let nextTurnIndex = state.turnIndex;
 
@@ -137,7 +162,8 @@ export default function CombatPage() {
   }
 
   function resetEncounter() {
-    setState({ round: 1, turnIndex: 0, combatants: [], lastUpdatedAt: new Date().toISOString() });
+    if (!isDm) return;
+    setState({ round: 1, turnIndex: 0, combatants: [], lastUpdatedAt: "" });
     setName("");
     setKind("Monster");
     setInitiative("");
@@ -149,6 +175,8 @@ export default function CombatPage() {
   }
 
   function addCombatant() {
+    if (!isDm) return;
+
     const n = name.trim();
     if (!n) return;
 
@@ -190,11 +218,13 @@ export default function CombatPage() {
   }
 
   function removeCombatant(id: string) {
+    if (!isDm) return;
     const preserveId = active?.id === id ? undefined : active?.id;
     setOrdered(state.combatants.filter((c) => c.id !== id), preserveId);
   }
 
   function updateCombatant(id: string, patch: Partial<Combatant>) {
+    if (!isDm) return;
     const preserveId = active?.id;
     setOrdered(
       state.combatants.map((c) => (c.id === id ? { ...c, ...patch } : c)),
@@ -203,6 +233,7 @@ export default function CombatPage() {
   }
 
   function nextTurn() {
+    if (!isDm) return;
     if (ordered.length === 0) return;
     setState((s) => {
       const nextIndex = s.turnIndex + 1;
@@ -214,6 +245,7 @@ export default function CombatPage() {
   }
 
   function prevTurn() {
+    if (!isDm) return;
     if (ordered.length === 0) return;
     setState((s) => {
       const prevIndex = s.turnIndex - 1;
@@ -229,14 +261,42 @@ export default function CombatPage() {
   }
 
   function startNewRound() {
+    if (!isDm) return;
     if (ordered.length === 0) return;
     setState((s) => ({ ...s, round: s.round + 1, turnIndex: 0 }));
   }
 
   function focusTurn(id: string) {
+    if (!isDm) return;
     const idx = ordered.findIndex((c) => c.id === id);
     if (idx < 0) return;
     setState((s) => ({ ...s, turnIndex: idx }));
+  }
+
+  if (!isClient) {
+    return (
+      <main className="sc-page">
+        <div className="sc-bg" style={{ backgroundImage: "url('/backgrounds/character.jpg')" }} />
+        <div className="sc-overlay" />
+        <div className="sc-content" style={{ padding: "2rem" }}>
+          <header
+            style={{
+              display: "flex",
+              alignItems: "flex-end",
+              justifyContent: "space-between",
+              gap: "1rem",
+            }}
+          >
+            <div>
+              <h1 style={{ fontSize: "2rem", lineHeight: 1.1 }}>Combat</h1>
+              <p style={{ opacity: 0.85, marginTop: "0.35rem" }}>
+                Quick encounter tracker (local-only for now). Round <strong>1</strong>
+              </p>
+            </div>
+          </header>
+        </div>
+      </main>
+    );
   }
 
   return (
@@ -256,121 +316,135 @@ export default function CombatPage() {
           <div>
             <h1 style={{ fontSize: "2rem", lineHeight: 1.1 }}>Combat</h1>
             <p style={{ opacity: 0.85, marginTop: "0.35rem" }}>
-              Quick encounter tracker (local-only for now). Round{" "}
-              <strong>{state.round}</strong>
+              Quick encounter tracker (local-only for now). Round <strong>{state.round}</strong>
               {active ? (
                 <>
                   {" "}
                   • Current: <strong>{active.name}</strong>
                 </>
               ) : null}
+              {!isDm ? (
+                <>
+                  {" "}
+                  • <strong>View only</strong>
+                </>
+              ) : null}
             </p>
           </div>
 
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", justifyContent: "flex-end" }}>
-            <button onClick={prevTurn} style={ghostBtn} disabled={ordered.length === 0}>
+            <button onClick={prevTurn} style={ghostBtn} disabled={!isDm || ordered.length === 0}>
               Prev
             </button>
-            <button onClick={nextTurn} style={btn} disabled={ordered.length === 0}>
+            <button onClick={nextTurn} style={btn} disabled={!isDm || ordered.length === 0}>
               Next Turn
             </button>
-            <button onClick={startNewRound} style={ghostBtn} disabled={ordered.length === 0}>
+            <button onClick={startNewRound} style={ghostBtn} disabled={!isDm || ordered.length === 0}>
               New Round
             </button>
-            <button onClick={resetEncounter} style={{ ...dangerBtn, marginLeft: "0.25rem" }}>
+            <button onClick={resetEncounter} style={{ ...dangerBtn, marginLeft: "0.25rem" }} disabled={!isDm}>
               Reset
             </button>
           </div>
         </header>
 
-        <section style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: "1rem", marginTop: "1rem" }}>
-          <div style={card}>
-            <h2 style={{ marginBottom: "0.5rem" }}>Add Combatant</h2>
-            <p style={{ opacity: 0.8, fontSize: "0.95rem", marginBottom: "0.85rem" }}>
-              Enter initiative (or 0), optional AC/HP, and any conditions.
-            </p>
+        <section
+          style={{
+            display: "grid",
+            gridTemplateColumns: isDm ? "1.1fr 1fr" : "1fr",
+            gap: "1rem",
+            marginTop: "1rem",
+          }}
+        >
+          {isDm ? (
+            <div style={card}>
+              <h2 style={{ marginBottom: "0.5rem" }}>Add Combatant</h2>
+              <p style={{ opacity: 0.8, fontSize: "0.95rem", marginBottom: "0.85rem" }}>
+                Enter initiative (or 0), optional AC/HP, and any conditions.
+              </p>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1.25fr 0.9fr", gap: "0.75rem" }}>
-              <label style={{ display: "block" }}>
-                <div style={label}>Name</div>
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g., Frost Warg"
-                  style={input}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") addCombatant();
-                  }}
+              <div style={{ display: "grid", gridTemplateColumns: "1.25fr 0.9fr", gap: "0.75rem" }}>
+                <label style={{ display: "block" }}>
+                  <div style={label}>Name</div>
+                  <input
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="e.g., Frost Warg"
+                    style={input}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") addCombatant();
+                    }}
+                  />
+                </label>
+
+                <label style={{ display: "block" }}>
+                  <div style={label}>Type</div>
+                  <select value={kind} onChange={(e) => setKind(e.target.value as CombatantType)} style={select}>
+                    <option value="PC">PC</option>
+                    <option value="NPC">NPC</option>
+                    <option value="Monster">Monster</option>
+                  </select>
+                </label>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "0.75rem", marginTop: "0.75rem" }}>
+                <label style={{ display: "block" }}>
+                  <div style={label}>Init</div>
+                  <input value={initiative} onChange={(e) => setInitiative(e.target.value)} inputMode="numeric" style={input} placeholder="0" />
+                </label>
+
+                <label style={{ display: "block" }}>
+                  <div style={label}>AC</div>
+                  <input value={ac} onChange={(e) => setAc(e.target.value)} inputMode="numeric" style={input} placeholder="—" />
+                </label>
+
+                <label style={{ display: "block" }}>
+                  <div style={label}>HP</div>
+                  <input value={hp} onChange={(e) => setHp(e.target.value)} inputMode="numeric" style={input} placeholder="—" />
+                </label>
+
+                <label style={{ display: "block" }}>
+                  <div style={label}>Max</div>
+                  <input value={maxHp} onChange={(e) => setMaxHp(e.target.value)} inputMode="numeric" style={input} placeholder="—" />
+                </label>
+              </div>
+
+              <label style={{ display: "block", marginTop: "0.75rem" }}>
+                <div style={label}>Conditions (comma-separated)</div>
+                <input value={conditions} onChange={(e) => setConditions(e.target.value)} style={input} placeholder="e.g., prone, grappled" />
+              </label>
+
+              <label style={{ display: "block", marginTop: "0.75rem" }}>
+                <div style={label}>Notes</div>
+                <textarea
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  style={{ ...input, minHeight: 78, resize: "vertical" }}
+                  placeholder="Legendary resist used, concentrating on..."
                 />
               </label>
 
-              <label style={{ display: "block" }}>
-                <div style={label}>Type</div>
-                <select value={kind} onChange={(e) => setKind(e.target.value as CombatantType)} style={select}>
-                  <option value="PC">PC</option>
-                  <option value="NPC">NPC</option>
-                  <option value="Monster">Monster</option>
-                </select>
-              </label>
+              <div style={{ display: "flex", gap: "0.75rem", marginTop: "0.9rem" }}>
+                <button onClick={addCombatant} style={btn}>
+                  Add
+                </button>
+                <button
+                  onClick={() => {
+                    setName("");
+                    setInitiative("");
+                    setAc("");
+                    setHp("");
+                    setMaxHp("");
+                    setConditions("");
+                    setNotes("");
+                  }}
+                  style={ghostBtn}
+                >
+                  Clear
+                </button>
+              </div>
             </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "0.75rem", marginTop: "0.75rem" }}>
-              <label style={{ display: "block" }}>
-                <div style={label}>Init</div>
-                <input value={initiative} onChange={(e) => setInitiative(e.target.value)} inputMode="numeric" style={input} placeholder="0" />
-              </label>
-
-              <label style={{ display: "block" }}>
-                <div style={label}>AC</div>
-                <input value={ac} onChange={(e) => setAc(e.target.value)} inputMode="numeric" style={input} placeholder="—" />
-              </label>
-
-              <label style={{ display: "block" }}>
-                <div style={label}>HP</div>
-                <input value={hp} onChange={(e) => setHp(e.target.value)} inputMode="numeric" style={input} placeholder="—" />
-              </label>
-
-              <label style={{ display: "block" }}>
-                <div style={label}>Max</div>
-                <input value={maxHp} onChange={(e) => setMaxHp(e.target.value)} inputMode="numeric" style={input} placeholder="—" />
-              </label>
-            </div>
-
-            <label style={{ display: "block", marginTop: "0.75rem" }}>
-              <div style={label}>Conditions (comma-separated)</div>
-              <input value={conditions} onChange={(e) => setConditions(e.target.value)} style={input} placeholder="e.g., prone, grappled" />
-            </label>
-
-            <label style={{ display: "block", marginTop: "0.75rem" }}>
-              <div style={label}>Notes</div>
-              <textarea
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                style={{ ...input, minHeight: 78, resize: "vertical" }}
-                placeholder="Legendary resist used, concentrating on..."
-              />
-            </label>
-
-            <div style={{ display: "flex", gap: "0.75rem", marginTop: "0.9rem" }}>
-              <button onClick={addCombatant} style={btn}>
-                Add
-              </button>
-              <button
-                onClick={() => {
-                  setName("");
-                  setInitiative("");
-                  setAc("");
-                  setHp("");
-                  setMaxHp("");
-                  setConditions("");
-                  setNotes("");
-                }}
-                style={ghostBtn}
-              >
-                Clear
-              </button>
-            </div>
-          </div>
+          ) : null}
 
           <div style={card}>
             <h2 style={{ marginBottom: "0.5rem" }}>Current Turn</h2>
@@ -401,11 +475,11 @@ export default function CombatPage() {
                     <div style={{ opacity: 0.8, fontSize: "0.9rem" }}>HP</div>
                     <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.35rem", flexWrap: "wrap" }}>
                       <HpPill c={active} />
-                      <HpAdjust c={active} onChange={(nextHp) => updateCombatant(active.id, { hp: nextHp })} />
+                      {isDm ? <HpAdjust c={active} onChange={(nextHp) => updateCombatant(active.id, { hp: nextHp })} /> : null}
                       <button
                         style={ghostBtnSmall}
                         onClick={() => updateCombatant(active.id, { hp: active.maxHp ?? active.hp })}
-                        disabled={typeof active.maxHp !== "number"}
+                        disabled={!isDm || typeof active.maxHp !== "number"}
                         title={typeof active.maxHp !== "number" ? "Set Max HP to use" : "Set HP to Max"}
                       >
                         Full
@@ -426,7 +500,8 @@ export default function CombatPage() {
                               })
                             }
                             style={condPill}
-                            title="Click to remove"
+                            disabled={!isDm}
+                            title={isDm ? "Click to remove" : undefined}
                           >
                             {cnd}
                           </button>
@@ -436,21 +511,23 @@ export default function CombatPage() {
                       )}
                     </div>
 
-                    <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.6rem" }}>
-                      <input
-                        placeholder="add condition"
-                        style={{ ...input, padding: "0.55rem 0.65rem" }}
-                        onKeyDown={(e) => {
-                          if (e.key !== "Enter") return;
-                          const v = (e.currentTarget.value || "").trim();
-                          if (!v) return;
-                          e.currentTarget.value = "";
-                          updateCombatant(active.id, {
-                            conditions: Array.from(new Set([...(active.conditions || []), v])),
-                          });
-                        }}
-                      />
-                    </div>
+                    {isDm ? (
+                      <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.6rem" }}>
+                        <input
+                          placeholder="add condition"
+                          style={{ ...input, padding: "0.55rem 0.65rem" }}
+                          onKeyDown={(e) => {
+                            if (e.key !== "Enter") return;
+                            const v = (e.currentTarget.value || "").trim();
+                            if (!v) return;
+                            e.currentTarget.value = "";
+                            updateCombatant(active.id, {
+                              conditions: Array.from(new Set([...(active.conditions || []), v])),
+                            });
+                          }}
+                        />
+                      </div>
+                    ) : null}
                   </div>
                 </div>
 
@@ -459,13 +536,14 @@ export default function CombatPage() {
                   <textarea
                     value={active.notes || ""}
                     onChange={(e) => updateCombatant(active.id, { notes: e.target.value })}
+                    readOnly={!isDm}
                     style={{ ...input, minHeight: 92, resize: "vertical", marginTop: "0.35rem" }}
                     placeholder="What matters right now…"
                   />
                 </div>
               </div>
             ) : (
-              <p style={{ opacity: 0.85 }}>No active encounter yet. Add combatants on the left.</p>
+              <p style={{ opacity: 0.85 }}>No active encounter yet.</p>
             )}
           </div>
         </section>
@@ -484,18 +562,7 @@ export default function CombatPage() {
                 const isActive = active?.id === c.id;
                 return (
                   <div key={c.id} style={{ ...row, borderColor: isActive ? "#d4af37" : "#222" }}>
-                    <button
-                      onClick={() => focusTurn(c.id)}
-                      style={{
-                        textAlign: "left",
-                        background: "transparent",
-                        border: "none",
-                        color: "inherit",
-                        cursor: "pointer",
-                        padding: 0,
-                      }}
-                      title="Make active"
-                    >
+                    <div style={{ textAlign: "left" }}>
                       <div style={{ display: "flex", gap: "0.6rem", alignItems: "baseline", flexWrap: "wrap" }}>
                         <span
                           style={{
@@ -530,62 +597,62 @@ export default function CombatPage() {
                           </>
                         ) : null}
                       </div>
-                    </button>
-
-                    <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
-                      <input
-                        value={String(c.initiative)}
-                        onChange={(e) => updateCombatant(c.id, { initiative: safeInt(e.target.value, 0) })}
-                        inputMode="numeric"
-                        style={{ ...miniInput, width: 74 }}
-                        title="Initiative"
-                      />
-                      <input
-                        value={typeof c.ac === "number" ? String(c.ac) : ""}
-                        onChange={(e) => {
-                          const v = e.target.value.trim();
-                          updateCombatant(c.id, { ac: v ? safeInt(v, 0) : undefined });
-                        }}
-                        inputMode="numeric"
-                        style={{ ...miniInput, width: 74 }}
-                        placeholder="AC"
-                        title="AC"
-                      />
-                      <input
-                        value={typeof c.hp === "number" ? String(c.hp) : ""}
-                        onChange={(e) => {
-                          const v = e.target.value.trim();
-                          updateCombatant(c.id, { hp: v ? safeInt(v, 0) : undefined });
-                        }}
-                        inputMode="numeric"
-                        style={{ ...miniInput, width: 74 }}
-                        placeholder="HP"
-                        title="HP"
-                      />
-                      <input
-                        value={typeof c.maxHp === "number" ? String(c.maxHp) : ""}
-                        onChange={(e) => {
-                          const v = e.target.value.trim();
-                          updateCombatant(c.id, { maxHp: v ? safeInt(v, 0) : undefined });
-                        }}
-                        inputMode="numeric"
-                        style={{ ...miniInput, width: 74 }}
-                        placeholder="Max"
-                        title="Max HP"
-                      />
-
-                      <button onClick={() => removeCombatant(c.id)} style={dangerBtnSmall} title="Remove">
-                        Remove
-                      </button>
                     </div>
+
+                    {isDm ? (
+                      <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+                        <input
+                          value={String(c.initiative)}
+                          onChange={(e) => updateCombatant(c.id, { initiative: safeInt(e.target.value, 0) })}
+                          inputMode="numeric"
+                          style={{ ...miniInput, width: 74 }}
+                          title="Initiative"
+                        />
+                        <input
+                          value={typeof c.ac === "number" ? String(c.ac) : ""}
+                          onChange={(e) => {
+                            const v = e.target.value.trim();
+                            updateCombatant(c.id, { ac: v ? safeInt(v, 0) : undefined });
+                          }}
+                          inputMode="numeric"
+                          style={{ ...miniInput, width: 74 }}
+                          placeholder="AC"
+                          title="AC"
+                        />
+                        <input
+                          value={typeof c.hp === "number" ? String(c.hp) : ""}
+                          onChange={(e) => {
+                            const v = e.target.value.trim();
+                            updateCombatant(c.id, { hp: v ? safeInt(v, 0) : undefined });
+                          }}
+                          inputMode="numeric"
+                          style={{ ...miniInput, width: 74 }}
+                          placeholder="HP"
+                          title="HP"
+                        />
+                        <input
+                          value={typeof c.maxHp === "number" ? String(c.maxHp) : ""}
+                          onChange={(e) => {
+                            const v = e.target.value.trim();
+                            updateCombatant(c.id, { maxHp: v ? safeInt(v, 0) : undefined });
+                          }}
+                          inputMode="numeric"
+                          style={{ ...miniInput, width: 74 }}
+                          placeholder="Max"
+                          title="Max HP"
+                        />
+
+                        <button onClick={() => removeCombatant(c.id)} style={dangerBtnSmall} title="Remove">
+                          Remove
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 );
               })
             ) : (
               <div style={card}>
-                <p style={{ opacity: 0.85 }}>
-                  Add combatants to begin. Tip: You can edit initiative/HP inline once they’re in the list.
-                </p>
+                <p style={{ opacity: 0.85 }}>No combatants yet.</p>
               </div>
             )}
           </div>
@@ -632,8 +699,6 @@ function HpAdjust({ c, onChange }: { c: Combatant; onChange: (nextHp: number) =>
     </div>
   );
 }
-
-/* ---------- styles ---------- */
 
 const card: React.CSSProperties = {
   border: "1px solid #222",
@@ -740,6 +805,5 @@ const pill: React.CSSProperties = {
 
 const condPill: React.CSSProperties = {
   ...pill,
-  cursor: "pointer",
   background: "rgba(255,255,255,0.05)",
 };
