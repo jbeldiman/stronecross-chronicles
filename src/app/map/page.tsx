@@ -19,9 +19,9 @@ type TownId =
 type Town = {
   id: TownId;
   name: string;
-  x: number; 
-  y: number; 
-  mapSrc?: string; 
+  x: number;
+  y: number;
+  mapSrc?: string;
   summary?: string;
   npcs?: { name: string; location: string; note?: string }[];
 };
@@ -32,8 +32,6 @@ type Session = {
 };
 
 const STORAGE_UNLOCKS = "stonecross.map.unlocks.v1";
-
-
 const DEFAULT_UNLOCKED: TownId[] = ["stonecross", "stormwatch", "westhaven"];
 
 function loadSession(): Session | null {
@@ -70,7 +68,7 @@ export default function MapPage() {
   const [session, setSession] = useState<Session | null>(null);
   const [unlocked, setUnlocked] = useState<TownId[]>(DEFAULT_UNLOCKED);
   const [selected, setSelected] = useState<Town | null>(null);
-
+  const [playerPreview, setPlayerPreview] = useState(false);
 
   useEffect(() => {
     const s = loadSession();
@@ -80,16 +78,15 @@ export default function MapPage() {
     }
     setSession(s);
     setUnlocked(loadUnlocked());
-    
   }, []);
 
- 
   useEffect(() => {
     if (!session) return;
     saveUnlocked(unlocked);
   }, [unlocked, session]);
 
   const isDm = session?.username === DM_USERNAME;
+  const effectiveIsDm = Boolean(isDm && !playerPreview);
 
   const towns: Town[] = useMemo(
     () => [
@@ -183,33 +180,55 @@ export default function MapPage() {
   }
 
   function toggleUnlock(id: TownId) {
-    setUnlocked((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
+    setUnlocked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
 
   return (
     <main className="sc-page">
-      <div
-        className="sc-bg"
-        style={{ backgroundImage: "url('/backgrounds/map.jpg')" }}
-      />
+      <div className="sc-bg" style={{ backgroundImage: "url('/backgrounds/map.jpg')" }} />
       <div className="sc-overlay" />
       <div className="sc-content" style={{ padding: "2rem" }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem" }}>
           <div>
             <h1 style={{ marginBottom: "0.25rem" }}>World Map</h1>
-            <p style={{ opacity: 0.85 }}>
-              Click a location to view details. Some locations may be locked.
-            </p>
+            <p style={{ opacity: 0.85 }}>Click a location to view details. Some locations may be locked.</p>
           </div>
 
-          <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start", flexWrap: "wrap", justifyContent: "flex-end" }}>
             <span style={{ opacity: 0.75, fontSize: "0.95rem" }}>
               Logged in as <strong>{session.username}</strong>
             </span>
+
+            {isDm ? (
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  padding: "0.45rem 0.65rem",
+                  border: "1px solid #222",
+                  borderRadius: 12,
+                  background: "rgba(0,0,0,0.25)",
+                  cursor: "pointer",
+                  userSelect: "none",
+                }}
+                title="Preview what players see (DM powers disabled while enabled)"
+              >
+                <span style={{ opacity: 0.9, fontSize: "0.9rem" }}>Player View</span>
+                <input type="checkbox" checked={playerPreview} onChange={(e) => setPlayerPreview(e.target.checked)} />
+              </label>
+            ) : null}
           </div>
         </div>
+
+        {playerPreview ? (
+          <div style={{ ...cardStyle, marginTop: "1rem", borderStyle: "dashed" }}>
+            <strong>Player View Enabled</strong>
+            <div style={{ opacity: 0.85, marginTop: "0.25rem" }}>
+              DM powers are temporarily disabled so you can preview what players see.
+            </div>
+          </div>
+        ) : null}
 
         <section style={{ ...cardStyle, marginTop: "1rem" }}>
           <div style={{ position: "relative", width: "100%", borderRadius: 14, overflow: "hidden" }}>
@@ -226,10 +245,10 @@ export default function MapPage() {
                 <button
                   key={t.id}
                   onClick={() => {
-                    if (!unlockedTown && !isDm) return;
+                    if (!unlockedTown && !effectiveIsDm) return;
                     setSelected(t);
                   }}
-                  title={unlockedTown || isDm ? t.name : `${t.name} (Locked)`}
+                  title={unlockedTown || effectiveIsDm ? t.name : `${t.name} (Locked)`}
                   style={{
                     position: "absolute",
                     left: `${t.x}%`,
@@ -238,18 +257,12 @@ export default function MapPage() {
                     width: 26,
                     height: 26,
                     borderRadius: 999,
-                    border: unlockedTown || isDm
-                      ? "2px solid rgba(255,255,255,0.9)"
-                      : "2px solid rgba(255,255,255,0.25)",
-                    background: unlockedTown || isDm
-                      ? "rgba(0,0,0,0.35)"
-                      : "rgba(0,0,0,0.65)",
-                    cursor: unlockedTown || isDm ? "pointer" : "not-allowed",
+                    border: unlockedTown || effectiveIsDm ? "2px solid rgba(255,255,255,0.9)" : "2px solid rgba(255,255,255,0.25)",
+                    background: unlockedTown || effectiveIsDm ? "rgba(0,0,0,0.35)" : "rgba(0,0,0,0.65)",
+                    cursor: unlockedTown || effectiveIsDm ? "pointer" : "not-allowed",
                     backdropFilter: "blur(2px)",
-                    boxShadow: unlockedTown || isDm
-                      ? "0 0 0 3px rgba(212,175,55,0.12)"
-                      : "none",
-                    opacity: unlockedTown || isDm ? 1 : 0.6,
+                    boxShadow: unlockedTown || effectiveIsDm ? "0 0 0 3px rgba(212,175,55,0.12)" : "none",
+                    opacity: unlockedTown || effectiveIsDm ? 1 : 0.6,
                   }}
                 />
               );
@@ -258,11 +271,10 @@ export default function MapPage() {
 
           <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", marginTop: "0.75rem" }}>
             <p style={{ opacity: 0.8, margin: 0 }}>
-              Tip: Town maps live in <code>public/maps/towns/</code>. If a town map image isn’t found yet,
-              the modal will still show the town details.
+              Tip: Town maps live in <code>public/maps/towns/</code>. If a town map image isn’t found yet, the modal will still show the town details.
             </p>
 
-            {isDm ? (
+            {effectiveIsDm ? (
               <span style={{ opacity: 0.85 }}>
                 DM Mode: <strong>Unlock controls enabled</strong>
               </span>
@@ -272,12 +284,10 @@ export default function MapPage() {
           </div>
         </section>
 
-        {isDm ? (
+        {isDm && !playerPreview ? (
           <section style={{ ...cardStyle, marginTop: "1rem" }}>
             <h2 style={h2}>DM Unlocks</h2>
-            <p style={{ opacity: 0.8, marginBottom: "0.75rem" }}>
-              Toggle which locations are visible to players.
-            </p>
+            <p style={{ opacity: 0.8, marginBottom: "0.75rem" }}>Toggle which locations are visible to players.</p>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
               {towns.map((t) => {
@@ -297,11 +307,7 @@ export default function MapPage() {
                     }}
                   >
                     <span>{t.name}</span>
-                    <input
-                      type="checkbox"
-                      checked={on}
-                      onChange={() => toggleUnlock(t.id)}
-                    />
+                    <input type="checkbox" checked={on} onChange={() => toggleUnlock(t.id)} />
                   </label>
                 );
               })}
@@ -309,7 +315,6 @@ export default function MapPage() {
           </section>
         ) : null}
 
-        {/* Modal */}
         {selected && (
           <div
             onClick={() => setSelected(null)}
@@ -347,9 +352,7 @@ export default function MapPage() {
                 <div>
                   <strong style={{ color: "white", fontSize: "1.05rem" }}>{selected.name}</strong>
                   {selected.summary ? (
-                    <div style={{ opacity: 0.8, fontSize: "0.9rem", marginTop: "0.15rem" }}>
-                      {selected.summary}
-                    </div>
+                    <div style={{ opacity: 0.8, fontSize: "0.9rem", marginTop: "0.15rem" }}>{selected.summary}</div>
                   ) : null}
                 </div>
 
@@ -364,17 +367,20 @@ export default function MapPage() {
                     <img
                       src={selected.mapSrc}
                       alt={`${selected.name} map`}
-                      style={{ width: "100%", display: "block", maxHeight: "70vh", objectFit: "contain", background: "#0b0b0b" }}
+                      style={{
+                        width: "100%",
+                        display: "block",
+                        maxHeight: "70vh",
+                        objectFit: "contain",
+                        background: "#0b0b0b",
+                      }}
                       draggable={false}
                       onError={(e) => {
-                      
                         (e.currentTarget as HTMLImageElement).style.display = "none";
                       }}
                     />
                   ) : (
-                    <div style={{ padding: "1rem", opacity: 0.8 }}>
-                      No town map image set yet.
-                    </div>
+                    <div style={{ padding: "1rem", opacity: 0.8 }}>No town map image set yet.</div>
                   )}
                 </div>
 
@@ -385,26 +391,19 @@ export default function MapPage() {
                     <ul style={{ paddingLeft: "1rem", marginTop: "0.5rem" }}>
                       {selected.npcs.map((n) => (
                         <li key={`${selected.id}-${n.name}`} style={{ margin: "0.35rem 0" }}>
-                          <strong>{n.name}</strong>{" "}
-                          <span style={{ opacity: 0.8 }}>— {n.location}</span>
+                          <strong>{n.name}</strong> <span style={{ opacity: 0.8 }}>— {n.location}</span>
                           {n.note ? (
-                            <div style={{ opacity: 0.75, fontSize: "0.92rem", marginTop: "0.15rem" }}>
-                              {n.note}
-                            </div>
+                            <div style={{ opacity: 0.75, fontSize: "0.92rem", marginTop: "0.15rem" }}>{n.note}</div>
                           ) : null}
                         </li>
                       ))}
                     </ul>
                   ) : (
-                    <p style={{ opacity: 0.8, marginTop: "0.5rem" }}>
-                      No NPCs listed yet.
-                    </p>
+                    <p style={{ opacity: 0.8, marginTop: "0.5rem" }}>No NPCs listed yet.</p>
                   )}
 
                   <div style={{ marginTop: "1rem", opacity: 0.8, lineHeight: 1.35 }}>
-                    <p style={{ marginBottom: "0.5rem" }}>
-                      Next upgrades:
-                    </p>
+                    <p style={{ marginBottom: "0.5rem" }}>Next upgrades:</p>
                     <ul style={{ paddingLeft: "1.2rem" }}>
                       <li>Lock/unlock towns based on party progress</li>
                       <li>Clickable NPC pins inside the town map</li>
@@ -420,8 +419,6 @@ export default function MapPage() {
     </main>
   );
 }
-
-/* ---------- styles ---------- */
 
 const cardStyle: React.CSSProperties = {
   border: "1px solid #222",
