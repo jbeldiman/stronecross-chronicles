@@ -175,6 +175,10 @@ function nextLevelXp(level: number) {
   return XP_FOR_LEVEL[l + 1];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function defaultSheet(): CharacterSheet {
   return {
     name: "Unnamed Hero",
@@ -197,9 +201,7 @@ function defaultSheet(): CharacterSheet {
 
     inventory: ["Rations", "Torch", "Rope (50 ft)"],
 
-    weapons: [
-      { name: "Longsword", toHitBonus: 0, damageBonus: 0, magicalEffects: "" },
-    ],
+    weapons: [{ name: "Longsword", toHitBonus: 0, damageBonus: 0, magicalEffects: "" }],
     armor: { name: "Leather Armor", acBonus: 0, dexCap: null, notes: "" },
 
     background: "",
@@ -211,47 +213,110 @@ function defaultSheet(): CharacterSheet {
     traits: ["Darkvision"],
 
     cantripIds: [],
-    spellIdsByLevel: {
-      1: [],
-      2: [],
-      3: [],
-      4: [],
-      5: [],
-      6: [],
-      7: [],
-      8: [],
-      9: [],
-    },
+    spellIdsByLevel: { 1: [], 2: [], 3: [], 4: [], 5: [], 6: [], 7: [], 8: [], 9: [] },
     spellSlotsMax: { 1: 2, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0 },
     spellSlotsUsed: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0 },
   };
 }
 
-function normalizeSheet(raw: any): CharacterSheet {
+function normalizeSheet(raw: unknown): CharacterSheet {
   const base = defaultSheet();
+
+  const r = isRecord(raw) ? raw : {};
 
   const merged: CharacterSheet = {
     ...base,
-    ...(raw ?? {}),
-    level: clamp(Number(raw?.level ?? base.level), 1, 20),
-    experience: clamp(Number(raw?.experience ?? base.experience), 0, XP_FOR_LEVEL[20]),
-    abilities: { ...base.abilities, ...(raw?.abilities ?? {}) },
-    savingThrowProficiencies: { ...(raw?.savingThrowProficiencies ?? {}) },
-    skillProficiencies: { ...(raw?.skillProficiencies ?? {}) },
-    inventory: Array.isArray(raw?.inventory) ? raw.inventory : base.inventory,
-    weapons: Array.isArray(raw?.weapons) ? raw.weapons : base.weapons,
-    armor: raw?.armor ?? base.armor,
-    traits: Array.isArray(raw?.traits) ? raw.traits : base.traits,
-    cantripIds: Array.isArray(raw?.cantripIds) ? raw.cantripIds : base.cantripIds,
-    spellIdsByLevel: { ...base.spellIdsByLevel, ...(raw?.spellIdsByLevel ?? {}) },
-    spellSlotsMax: { ...base.spellSlotsMax, ...(raw?.spellSlotsMax ?? {}) },
-    spellSlotsUsed: { ...base.spellSlotsUsed, ...(raw?.spellSlotsUsed ?? {}) },
-    background: typeof raw?.background === "string" ? raw.background : base.background,
-    personalityTrait: typeof raw?.personalityTrait === "string" ? raw.personalityTrait : base.personalityTrait,
-    ideal: typeof raw?.ideal === "string" ? raw.ideal : base.ideal,
-    bond: typeof raw?.bond === "string" ? raw.bond : base.bond,
-    flaw: typeof raw?.flaw === "string" ? raw.flaw : base.flaw,
+    ...r,
+
+    name: typeof r.name === "string" ? r.name : base.name,
+    className: typeof r.className === "string" ? r.className : base.className,
+
+    level: clamp(Number(isRecord(r) ? r.level ?? base.level : base.level), 1, 20),
+    experience: clamp(
+      Number(isRecord(r) ? r.experience ?? base.experience : base.experience),
+      0,
+      XP_FOR_LEVEL[20]
+    ),
+
+    abilities: {
+      ...base.abilities,
+      ...(isRecord(r.abilities) ? (r.abilities as Record<string, unknown>) : {}),
+    } as CharacterSheet["abilities"],
+
+    savingThrowProficiencies: (isRecord(r.savingThrowProficiencies)
+      ? (r.savingThrowProficiencies as Record<string, unknown>)
+      : {}) as CharacterSheet["savingThrowProficiencies"],
+
+    skillProficiencies: (isRecord(r.skillProficiencies)
+      ? (r.skillProficiencies as Record<string, unknown>)
+      : {}) as CharacterSheet["skillProficiencies"],
+
+    maxHp: Number.isFinite(Number(r.maxHp)) ? clamp(Number(r.maxHp), 1, 999) : base.maxHp,
+    currentHp: Number.isFinite(Number(r.currentHp)) ? clamp(Number(r.currentHp), 0, 999) : base.currentHp,
+    tempHp: Number.isFinite(Number(r.tempHp)) ? clamp(Number(r.tempHp), 0, 999) : base.tempHp,
+
+    baseAc: Number.isFinite(Number(r.baseAc)) ? clamp(Number(r.baseAc), 0, 50) : base.baseAc,
+    initiativeBonus: Number.isFinite(Number(r.initiativeBonus)) ? clamp(Number(r.initiativeBonus), -20, 20) : base.initiativeBonus,
+    speed: Number.isFinite(Number(r.speed)) ? clamp(Number(r.speed), 0, 200) : base.speed,
+
+    inventory: Array.isArray(r.inventory) ? r.inventory.filter((x): x is string => typeof x === "string") : base.inventory,
+
+    weapons: Array.isArray(r.weapons)
+      ? r.weapons
+          .filter(isRecord)
+          .map((w) => ({
+            name: typeof w.name === "string" ? w.name : "Weapon",
+            toHitBonus: Number.isFinite(Number(w.toHitBonus)) ? Number(w.toHitBonus) : 0,
+            damageBonus: Number.isFinite(Number(w.damageBonus)) ? Number(w.damageBonus) : 0,
+            magicalEffects: typeof w.magicalEffects === "string" ? w.magicalEffects : "",
+          }))
+      : base.weapons,
+
+    armor: isRecord(r.armor)
+      ? {
+          name: typeof r.armor.name === "string" ? r.armor.name : "Armor",
+          acBonus: Number.isFinite(Number(r.armor.acBonus)) ? Number(r.armor.acBonus) : 0,
+          dexCap:
+            r.armor.dexCap === null
+              ? null
+              : Number.isFinite(Number(r.armor.dexCap))
+                ? Number(r.armor.dexCap)
+                : null,
+          notes: typeof r.armor.notes === "string" ? r.armor.notes : "",
+        }
+      : r.armor === null
+        ? null
+        : base.armor,
+
+    background: typeof r.background === "string" ? r.background : base.background,
+    personalityTrait: typeof r.personalityTrait === "string" ? r.personalityTrait : base.personalityTrait,
+    ideal: typeof r.ideal === "string" ? r.ideal : base.ideal,
+    bond: typeof r.bond === "string" ? r.bond : base.bond,
+    flaw: typeof r.flaw === "string" ? r.flaw : base.flaw,
+
+    traits: Array.isArray(r.traits) ? r.traits.filter((x): x is string => typeof x === "string") : base.traits,
+
+    cantripIds: Array.isArray(r.cantripIds) ? r.cantripIds.filter((x): x is string => typeof x === "string") : base.cantripIds,
+
+    spellIdsByLevel: {
+      ...base.spellIdsByLevel,
+      ...(isRecord(r.spellIdsByLevel) ? (r.spellIdsByLevel as Record<string, unknown>) : {}),
+    } as CharacterSheet["spellIdsByLevel"],
+
+    spellSlotsMax: {
+      ...base.spellSlotsMax,
+      ...(isRecord(r.spellSlotsMax) ? (r.spellSlotsMax as Record<string, unknown>) : {}),
+    } as CharacterSheet["spellSlotsMax"],
+
+    spellSlotsUsed: {
+      ...base.spellSlotsUsed,
+      ...(isRecord(r.spellSlotsUsed) ? (r.spellSlotsUsed as Record<string, unknown>) : {}),
+    } as CharacterSheet["spellSlotsUsed"],
   };
+
+  // Ensure required strings never end up undefined from spread
+  merged.name = merged.name || base.name;
+  merged.className = merged.className || base.className;
 
   return merged;
 }
@@ -260,8 +325,7 @@ function loadSheet(): CharacterSheet {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return defaultSheet();
-    const parsed = JSON.parse(raw);
-    if (!parsed?.abilities) return defaultSheet();
+    const parsed: unknown = JSON.parse(raw);
     return normalizeSheet(parsed);
   } catch {
     return defaultSheet();
@@ -273,15 +337,11 @@ function saveSheet(sheet: CharacterSheet) {
 }
 
 export default function CharacterPage() {
-  const [sheet, setSheet] = useState<CharacterSheet | null>(null);
+  const [sheet, setSheet] = useState<CharacterSheet>(() => loadSheet());
   const [selectedSpellId, setSelectedSpellId] = useState<string>("");
 
   useEffect(() => {
-    setSheet(loadSheet());
-  }, []);
-
-  useEffect(() => {
-    if (sheet) saveSheet(sheet);
+    saveSheet(sheet);
   }, [sheet]);
 
   const spellsById = useMemo(() => {
@@ -293,19 +353,6 @@ export default function CharacterPage() {
   const cantrips = useMemo(() => SPELLS.filter((s) => s.level === 0), []);
   const leveledSpells = useMemo(() => SPELLS.filter((s) => s.level > 0), []);
 
-  if (!sheet) {
-    return (
-      <main className="sc-page">
-        <div className="sc-bg" style={{ backgroundImage: "url('/backgrounds/character.jpg')" }} />
-        <div className="sc-overlay" />
-        <div className="sc-content" style={{ padding: "2rem" }}>
-          <h1>Character</h1>
-          <p>Loading...</p>
-        </div>
-      </main>
-    );
-  }
-
   const proficiencyBonus = profBonusForLevel(sheet.level);
   const nextXp = nextLevelXp(sheet.level);
   const xpToNext = nextXp === null ? 0 : Math.max(0, nextXp - sheet.experience);
@@ -313,15 +360,13 @@ export default function CharacterPage() {
   const dexMod = abilityMod(sheet.abilities.DEX);
   const armorAc =
     sheet.armor
-      ? sheet.baseAc +
-        sheet.armor.acBonus +
-        Math.min(dexMod, sheet.armor.dexCap ?? dexMod)
+      ? sheet.baseAc + sheet.armor.acBonus + Math.min(dexMod, sheet.armor.dexCap ?? dexMod)
       : sheet.baseAc + dexMod;
 
   const selectedSpell = selectedSpellId ? spellsById.get(selectedSpellId) : undefined;
 
   function update<K extends keyof CharacterSheet>(key: K, value: CharacterSheet[K]) {
-    setSheet({ ...sheet, [key]: value });
+    setSheet((prev) => ({ ...prev, [key]: value }));
   }
 
   function ensureSpellExists(id: string) {
@@ -661,7 +706,7 @@ export default function CharacterPage() {
                   <Field label="Armor Name">
                     <input
                       value={sheet.armor.name}
-                      onChange={(e) => update("armor", { ...sheet.armor!, name: e.target.value })}
+                      onChange={(e) => update("armor", { ...sheet.armor, name: e.target.value })}
                       style={inputStyle}
                     />
                   </Field>
@@ -670,7 +715,7 @@ export default function CharacterPage() {
                     <input
                       type="number"
                       value={sheet.armor.acBonus}
-                      onChange={(e) => update("armor", { ...sheet.armor!, acBonus: Number(e.target.value) })}
+                      onChange={(e) => update("armor", { ...sheet.armor, acBonus: Number(e.target.value) })}
                       style={inputStyle}
                     />
                   </Field>
@@ -682,7 +727,7 @@ export default function CharacterPage() {
                       placeholder="none"
                       onChange={(e) => {
                         const v = e.target.value.trim();
-                        update("armor", { ...sheet.armor!, dexCap: v === "" ? null : Number(v) });
+                        update("armor", { ...sheet.armor, dexCap: v === "" ? null : Number(v) });
                       }}
                       style={inputStyle}
                     />
@@ -692,7 +737,7 @@ export default function CharacterPage() {
                 <Field label="Notes" style={{ marginTop: "0.75rem" }}>
                   <input
                     value={sheet.armor.notes}
-                    onChange={(e) => update("armor", { ...sheet.armor!, notes: e.target.value })}
+                    onChange={(e) => update("armor", { ...sheet.armor, notes: e.target.value })}
                     style={inputStyle}
                   />
                 </Field>
@@ -780,9 +825,7 @@ export default function CharacterPage() {
                   <p style={{ marginTop: "0.75rem" }}>{selectedSpell.description}</p>
                 </div>
               ) : (
-                <p style={{ opacity: 0.8 }}>
-                  Click a selected spell/cantrip to view details here.
-                </p>
+                <p style={{ opacity: 0.8 }}>Click a selected spell/cantrip to view details here.</p>
               )}
             </div>
 
@@ -793,28 +836,24 @@ export default function CharacterPage() {
                 <select
                   value={sheet.background}
                   onChange={(e) => {
-  const b = e.target.value;
-  setSheet((prev) =>
-    prev
-      ? {
-          ...prev,
-          background: b,
-          personalityTrait: "",
-          ideal: "",
-          bond: "",
-          flaw: "",
-        }
-      : prev
-  );
-}}
+                    const b = e.target.value;
+                    setSheet((prev) => ({
+                      ...prev,
+                      background: b,
+                      personalityTrait: "",
+                      ideal: "",
+                      bond: "",
+                      flaw: "",
+                    }));
+                  }}
                   style={inputStyle}
                 >
                   <option value="">Select…</option>
                   {BACKGROUNDS.map((b) => (
-  <option key={b} value={b}>
-    {b}
-  </option>
-))}
+                    <option key={b} value={b}>
+                      {b}
+                    </option>
+                  ))}
                 </select>
               </Field>
 
@@ -1008,12 +1047,7 @@ function TraitPicker({
 
   return (
     <div>
-      <input
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        placeholder="Search…"
-        style={inputStyle}
-      />
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" style={inputStyle} />
 
       <div style={{ marginTop: "0.5rem", opacity: 0.9, lineHeight: 1.35 }}>
         {value ? (
@@ -1067,9 +1101,7 @@ function Field({
 }) {
   return (
     <label style={{ display: "block", ...style }}>
-      <div style={{ fontSize: "0.85rem", opacity: 0.85, marginBottom: "0.25rem" }}>
-        {label}
-      </div>
+      <div style={{ fontSize: "0.85rem", opacity: 0.85, marginBottom: "0.25rem" }}>{label}</div>
       {children}
     </label>
   );
@@ -1079,9 +1111,7 @@ function Stat({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div style={miniCardStyle}>
       <div style={{ fontSize: "0.85rem", opacity: 0.85 }}>{label}</div>
-      <div style={{ fontSize: "1.35rem", fontWeight: 700, marginTop: "0.25rem" }}>
-        {value}
-      </div>
+      <div style={{ fontSize: "1.35rem", fontWeight: 700, marginTop: "0.25rem" }}>{value}</div>
     </div>
   );
 }
@@ -1096,12 +1126,7 @@ function AddRow({
   const [v, setV] = useState("");
   return (
     <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem" }}>
-      <input
-        value={v}
-        onChange={(e) => setV(e.target.value)}
-        placeholder={placeholder}
-        style={inputStyle}
-      />
+      <input value={v} onChange={(e) => setV(e.target.value)} placeholder={placeholder} style={inputStyle} />
       <button
         onClick={() => {
           const t = v.trim();
@@ -1142,12 +1167,7 @@ function SpellSearchAdd({
   return (
     <div style={{ marginTop: "0.5rem" }}>
       <Field label={label}>
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Type to search…"
-          style={inputStyle}
-        />
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Type to search…" style={inputStyle} />
       </Field>
 
       {q.trim() && (
@@ -1161,9 +1181,7 @@ function SpellSearchAdd({
           }}
         >
           {results.length === 0 ? (
-            <div style={{ padding: "0.6rem 0.8rem", opacity: 0.8 }}>
-              No matches.
-            </div>
+            <div style={{ padding: "0.6rem 0.8rem", opacity: 0.8 }}>No matches.</div>
           ) : (
             results.map((s, i) => (
               <button
@@ -1227,6 +1245,8 @@ function SelectedSpellList({
     </ul>
   );
 }
+
+/* ---------- styles ---------- */
 
 const cardStyle: React.CSSProperties = {
   border: "1px solid #222",
