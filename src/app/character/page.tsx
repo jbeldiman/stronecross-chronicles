@@ -698,68 +698,116 @@ export default function CharacterPage() {
             </button>
           </section>
 
-          <section style={cardStyle}>
-            <h2 style={h2}>Armor</h2>
-            {sheet.armor ? (
-              <>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 120px", gap: "0.75rem" }}>
-                  <Field label="Armor Name">
-                    <input
-                      value={sheet.armor.name}
-                      onChange={(e) => update("armor", { ...sheet.armor, name: e.target.value })}
-                      style={inputStyle}
-                    />
-                  </Field>
+        <section style={cardStyle}>
+  <h2 style={h2}>Armor</h2>
 
-                  <Field label="+ AC">
-                    <input
-                      type="number"
-                      value={sheet.armor.acBonus}
-                      onChange={(e) => update("armor", { ...sheet.armor, acBonus: Number(e.target.value) })}
-                      style={inputStyle}
-                    />
-                  </Field>
+  {sheet.armor ? (
+    <>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 120px 120px",
+          gap: "0.75rem",
+        }}
+      >
+        <Field label="Armor Name">
+          <input
+            value={sheet.armor.name}
+            onChange={(e) => {
+              const current = sheet.armor;
+              if (!current) return;
 
-                  <Field label="Dex Cap">
-                    <input
-                      type="number"
-                      value={sheet.armor.dexCap ?? ""}
-                      placeholder="none"
-                      onChange={(e) => {
-                        const v = e.target.value.trim();
-                        update("armor", { ...sheet.armor, dexCap: v === "" ? null : Number(v) });
-                      }}
-                      style={inputStyle}
-                    />
-                  </Field>
-                </div>
+              update("armor", {
+                name: e.target.value,
+                acBonus: current.acBonus,
+                dexCap: current.dexCap,
+                notes: current.notes,
+              });
+            }}
+            style={inputStyle}
+          />
+        </Field>
 
-                <Field label="Notes" style={{ marginTop: "0.75rem" }}>
-                  <input
-                    value={sheet.armor.notes}
-                    onChange={(e) => update("armor", { ...sheet.armor, notes: e.target.value })}
-                    style={inputStyle}
-                  />
-                </Field>
+        <Field label="+ AC">
+          <input
+            type="number"
+            value={sheet.armor.acBonus}
+            onChange={(e) => {
+              const current = sheet.armor;
+              if (!current) return;
 
-                <p style={{ marginTop: "0.75rem", opacity: 0.9 }}>
-                  Calculated AC: <strong>{armorAc}</strong>
-                </p>
+              update("armor", {
+                name: current.name,
+                acBonus: Number(e.target.value),
+                dexCap: current.dexCap,
+                notes: current.notes,
+              });
+            }}
+            style={inputStyle}
+          />
+        </Field>
 
-                <button onClick={() => update("armor", null)} style={btnStyle}>
-                  Remove Armor
-                </button>
-              </>
-            ) : (
-              <button
-                onClick={() => update("armor", { name: "Armor", acBonus: 0, dexCap: null, notes: "" })}
-                style={btnStyle}
-              >
-                + Add Armor
-              </button>
-            )}
-          </section>
-        </div>
+        <Field label="Dex Cap">
+          <input
+            type="number"
+            value={sheet.armor.dexCap ?? ""}
+            placeholder="none"
+            onChange={(e) => {
+              const current = sheet.armor;
+              if (!current) return;
+
+              const v = e.target.value.trim();
+              update("armor", {
+                name: current.name,
+                acBonus: current.acBonus,
+                dexCap: v === "" ? null : Number(v),
+                notes: current.notes,
+              });
+            }}
+            style={inputStyle}
+          />
+        </Field>
+      </div>
+
+      <Field label="Notes" style={{ marginTop: "0.75rem" }}>
+        <input
+          value={sheet.armor.notes}
+          onChange={(e) => {
+            const current = sheet.armor;
+            if (!current) return;
+
+            update("armor", {
+              name: current.name,
+              acBonus: current.acBonus,
+              dexCap: current.dexCap,
+              notes: e.target.value,
+            });
+          }}
+          style={inputStyle}
+        />
+      </Field>
+
+      <p style={{ marginTop: "0.75rem", opacity: 0.9 }}>
+        Calculated AC: <strong>{armorAc}</strong>
+      </p>
+
+      <button onClick={() => update("armor", null)} style={btnStyle}>
+        Remove Armor
+      </button>
+    </>
+  ) : (
+    <button
+      onClick={() =>
+        update("armor", { name: "Armor", acBonus: 0, dexCap: null, notes: "" })
+      }
+      style={btnStyle}
+    >
+      + Add Armor
+    </button>
+  )}
+</section>
+</div>
+  
 
         <section style={{ ...cardStyle, marginTop: "1rem" }}>
           <h2 style={h2}>Spellcasting</h2>
