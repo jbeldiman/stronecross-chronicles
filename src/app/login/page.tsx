@@ -1,10 +1,10 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 const AUTH_SESSION_KEY = "stonecross.session.v1";
-const AUTH_USERS_KEY = "stonecross.users.v1"; 
+const AUTH_USERS_KEY = "stonecross.users.v1";
 
 type StoredUser = {
   username: string;
@@ -15,7 +15,6 @@ type StoredUser = {
 function normalizeUsername(v: string) {
   return v.trim().toLowerCase();
 }
-
 
 async function sha256Hex(input: string): Promise<string> {
   const enc = new TextEncoder().encode(input);
@@ -39,7 +38,7 @@ function saveUsers(users: Record<string, StoredUser>) {
   localStorage.setItem(AUTH_USERS_KEY, JSON.stringify(users));
 }
 
-export default function LoginPage() {
+function LoginInner() {
   const router = useRouter();
   const params = useSearchParams();
 
@@ -51,27 +50,24 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false);
 
   const next = useMemo(() => {
-  const paramNext = params.get("next");
-  if (paramNext) return paramNext;
+    const paramNext = params.get("next");
+    if (paramNext) return paramNext;
 
+    try {
+      const session = localStorage.getItem(AUTH_SESSION_KEY);
+      if (session) {
+        const parsed = JSON.parse(session);
+        if (parsed?.username === "jbeldiman") return "/dm";
+      }
+    } catch {}
 
-  try {
-    const session = localStorage.getItem("stonecross.session.v1");
-    if (session) {
-      const parsed = JSON.parse(session);
-      if (parsed?.username === "jbeldiman") return "/dm";
-    }
-  } catch {}
-
-  return "/character";
-}, [params]);
-
-
+    return "/character";
+  }, [params]);
 
   useEffect(() => {
     const existing = localStorage.getItem(AUTH_SESSION_KEY);
     if (existing) router.replace(next);
-  }, []);
+  }, [router, next]);
 
   async function handleSubmit() {
     setError("");
@@ -115,7 +111,6 @@ export default function LoginPage() {
         return;
       }
 
-      
       if (!existing) {
         setError("Account not found. Switch to Create Account to register.");
         return;
@@ -137,10 +132,7 @@ export default function LoginPage() {
 
   return (
     <main className="sc-page">
-      <div
-        className="sc-bg"
-        style={{ backgroundImage: "url('/backgrounds/home.jpg')" }}
-      />
+      <div className="sc-bg" style={{ backgroundImage: "url('/backgrounds/home.jpg')" }} />
       <div className="sc-overlay" />
       <div className="sc-content" style={{ padding: "2rem" }}>
         <section style={cardStyle}>
@@ -193,9 +185,7 @@ export default function LoginPage() {
             />
           </label>
 
-          {error ? (
-            <p style={{ marginTop: "0.75rem", color: "#ffb4b4" }}>{error}</p>
-          ) : null}
+          {error ? <p style={{ marginTop: "0.75rem", color: "#ffb4b4" }}>{error}</p> : null}
 
           <div style={{ display: "flex", gap: "0.75rem", marginTop: "1rem" }}>
             <button onClick={handleSubmit} style={btnStyle} disabled={busy}>
@@ -214,8 +204,7 @@ export default function LoginPage() {
           <p style={{ marginTop: "1rem", opacity: 0.75, lineHeight: 1.35 }}>
             You’ll be redirected to: <strong>{next}</strong>
             <br />
-            (This v1 stores accounts locally on this device. We’ll upgrade to real
-            database login later.)
+            (This v1 stores accounts locally on this device. We’ll upgrade to real database login later.)
           </p>
         </section>
       </div>
@@ -223,7 +212,13 @@ export default function LoginPage() {
   );
 }
 
-/* ---------- styles ---------- */
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<main className="sc-page" style={{ padding: "2rem" }} />}>
+      <LoginInner />
+    </Suspense>
+  );
+}
 
 const cardStyle: React.CSSProperties = {
   maxWidth: 560,
