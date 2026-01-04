@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 const AUTH_SESSION_KEY = "stonecross.session.v1";
@@ -31,6 +31,11 @@ type Session = {
   loggedInAt?: string;
 };
 
+type UnlockState = {
+  unlocked: TownId[];
+  lastUpdatedAt: string;
+};
+
 const STORAGE_UNLOCKS = "stonecross.map.unlocks.v1";
 const DEFAULT_UNLOCKED: TownId[] = ["stonecross", "stormwatch", "westhaven"];
 
@@ -46,7 +51,7 @@ function loadSession(): Session | null {
   }
 }
 
-function loadUnlocked(): TownId[] {
+function loadUnlockedLocal(): TownId[] {
   try {
     const raw = localStorage.getItem(STORAGE_UNLOCKS);
     if (!raw) return DEFAULT_UNLOCKED;
@@ -58,35 +63,38 @@ function loadUnlocked(): TownId[] {
   }
 }
 
-function saveUnlocked(ids: TownId[]) {
+function saveUnlockedLocal(ids: TownId[]) {
   localStorage.setItem(STORAGE_UNLOCKS, JSON.stringify(ids));
+}
+
+async function fetchRemote(room: string): Promise<UnlockState | null> {
+  const res = await fetch(`/api/map-unlocks?room=${encodeURIComponent(room)}`, { cache: "no-store" });
+  if (!res.ok) return null;
+  const json = (await res.json()) as { data: UnlockState | null };
+  return json.data ?? null;
+}
+
+async function pushRemote(room: string, state: UnlockState): Promise<void> {
+  await fetch(`/api/map-unlocks?room=${encodeURIComponent(room)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(state),
+  });
 }
 
 export default function MapPage() {
   const router = useRouter();
 
+  const [isClient, setIsClient] = useState(false);
+  const [room, setRoom] = useState("default");
+
   const [session, setSession] = useState<Session | null>(null);
   const [unlocked, setUnlocked] = useState<TownId[]>(DEFAULT_UNLOCKED);
   const [selected, setSelected] = useState<Town | null>(null);
+
   const [playerPreview, setPlayerPreview] = useState(false);
 
-  useEffect(() => {
-    const s = loadSession();
-    if (!s) {
-      router.replace("/login?next=/map");
-      return;
-    }
-    setSession(s);
-    setUnlocked(loadUnlocked());
-  }, []);
-
-  useEffect(() => {
-    if (!session) return;
-    saveUnlocked(unlocked);
-  }, [unlocked, session]);
-
-  const isDm = session?.username === DM_USERNAME;
-  const effectiveIsDm = Boolean(isDm && !playerPreview);
+  const lastRemoteStamp = useRef<string>("");
 
   const towns: Town[] = useMemo(
     () => [
@@ -164,9 +172,80 @@ export default function MapPage() {
     []
   );
 
+  useEffect(() => {
+    setIsClient(true);
+
+    const sp = new URLSearchParams(window.location.search);
+    const r = (sp.get("room") || "default").trim() || "default";
+    setRoom(r);
+
+    const s = loadSession();
+    if (!s) {
+      router.replace(`/login?next=/map?room=${encodeURIComponent(r)}`);
+      return;
+    }
+    setSession(s);
+
+    const local = loadUnlockedLocal();
+    setUnlocked(local);
+  }, []);
+
+  const isDm = session?.username === DM_USERNAME;
+  const effectiveIsDm = Boolean(isDm && !playerPreview);
+
   const unlockedSet = useMemo(() => new Set(unlocked), [unlocked]);
 
-  if (!session) {
+  useEffect(() => {
+    if (!isClient || !session) return;
+
+    (async () => {
+      const remote = await fetchRemote(room);
+      if (remote?.unlocked) {
+        lastRemoteStamp.current = remote.lastUpdatedAt || "";
+        setUnlocked(remote.unlocked);
+        saveUnlockedLocal(remote.unlocked);
+      } else if (isDm) {
+        const seed: UnlockState = { unlocked: loadUnlockedLocal(), lastUpdatedAt: new Date().toISOString() };
+        await pushRemote(room, seed);
+        lastRemoteStamp.current = seed.lastUpdatedAt;
+      }
+    })();
+  }, [isClient, session, room, isDm]);
+
+  useEffect(() => {
+    if (!isClient || !session) return;
+    if (isDm) return;
+
+    const t = window.setInterval(async () => {
+      const remote = await fetchRemote(room);
+      if (!remote) return;
+      const stamp = remote.lastUpdatedAt || "";
+      if (stamp && stamp !== lastRemoteStamp.current) {
+        lastRemoteStamp.current = stamp;
+        setUnlocked(remote.unlocked || DEFAULT_UNLOCKED);
+        saveUnlockedLocal(remote.unlocked || DEFAULT_UNLOCKED);
+      }
+    }, 1500);
+
+    return () => window.clearInterval(t);
+  }, [isClient, session, room, isDm]);
+
+  function toggleUnlock(id: TownId) {
+    if (!effectiveIsDm) return;
+
+    setUnlocked((prev) => {
+      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+      saveUnlockedLocal(next);
+
+      const state: UnlockState = { unlocked: next, lastUpdatedAt: new Date().toISOString() };
+      pushRemote(room, state);
+      lastRemoteStamp.current = state.lastUpdatedAt;
+
+      return next;
+    });
+  }
+
+  if (!isClient || !session) {
     return (
       <main className="sc-page">
         <div className="sc-bg" style={{ backgroundImage: "url('/backgrounds/home.jpg')" }} />
@@ -177,10 +256,6 @@ export default function MapPage() {
         </div>
       </main>
     );
-  }
-
-  function toggleUnlock(id: TownId) {
-    setUnlocked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
 
   return (
@@ -224,9 +299,7 @@ export default function MapPage() {
         {playerPreview ? (
           <div style={{ ...cardStyle, marginTop: "1rem", borderStyle: "dashed" }}>
             <strong>Player View Enabled</strong>
-            <div style={{ opacity: 0.85, marginTop: "0.25rem" }}>
-              DM powers are temporarily disabled so you can preview what players see.
-            </div>
+            <div style={{ opacity: 0.85, marginTop: "0.25rem" }}>DM powers are temporarily disabled so you can preview what players see.</div>
           </div>
         ) : null}
 
@@ -271,7 +344,7 @@ export default function MapPage() {
 
           <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", marginTop: "0.75rem" }}>
             <p style={{ opacity: 0.8, margin: 0 }}>
-              Tip: Town maps live in <code>public/maps/towns/</code>. If a town map image isn’t found yet, the modal will still show the town details.
+              Room: <strong>{room}</strong> • Shared unlocks • Players update in ~1–2s
             </p>
 
             {effectiveIsDm ? (
@@ -367,13 +440,7 @@ export default function MapPage() {
                     <img
                       src={selected.mapSrc}
                       alt={`${selected.name} map`}
-                      style={{
-                        width: "100%",
-                        display: "block",
-                        maxHeight: "70vh",
-                        objectFit: "contain",
-                        background: "#0b0b0b",
-                      }}
+                      style={{ width: "100%", display: "block", maxHeight: "70vh", objectFit: "contain", background: "#0b0b0b" }}
                       draggable={false}
                       onError={(e) => {
                         (e.currentTarget as HTMLImageElement).style.display = "none";
@@ -392,24 +459,13 @@ export default function MapPage() {
                       {selected.npcs.map((n) => (
                         <li key={`${selected.id}-${n.name}`} style={{ margin: "0.35rem 0" }}>
                           <strong>{n.name}</strong> <span style={{ opacity: 0.8 }}>— {n.location}</span>
-                          {n.note ? (
-                            <div style={{ opacity: 0.75, fontSize: "0.92rem", marginTop: "0.15rem" }}>{n.note}</div>
-                          ) : null}
+                          {n.note ? <div style={{ opacity: 0.75, fontSize: "0.92rem", marginTop: "0.15rem" }}>{n.note}</div> : null}
                         </li>
                       ))}
                     </ul>
                   ) : (
                     <p style={{ opacity: 0.8, marginTop: "0.5rem" }}>No NPCs listed yet.</p>
                   )}
-
-                  <div style={{ marginTop: "1rem", opacity: 0.8, lineHeight: 1.35 }}>
-                    <p style={{ marginBottom: "0.5rem" }}>Next upgrades:</p>
-                    <ul style={{ paddingLeft: "1.2rem" }}>
-                      <li>Lock/unlock towns based on party progress</li>
-                      <li>Clickable NPC pins inside the town map</li>
-                      <li>DM-only edit panel for notes and NPCs</li>
-                    </ul>
-                  </div>
                 </div>
               </div>
             </div>
