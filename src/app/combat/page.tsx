@@ -39,11 +39,14 @@ function safeInt(v: string, fallback: number) {
   return Number.isFinite(n) ? n : fallback;
 }
 
-function loadEncounter(): EncounterState {
-  if (typeof window === "undefined") {
-    return { round: 1, turnIndex: 0, combatants: [], lastUpdatedAt: "" };
-  }
+function sortByInitiativeDesc(list: Combatant[]) {
+  return [...list].sort((a, b) => {
+    if (b.initiative !== a.initiative) return b.initiative - a.initiative;
+    return a.name.localeCompare(b.name);
+  });
+}
 
+function loadEncounter(): EncounterState {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) throw new Error("no data");
@@ -72,18 +75,8 @@ function loadEncounter(): EncounterState {
   }
 }
 
-function saveEncounter(state: EncounterState) {
-  localStorage.setItem(
-    STORAGE_KEY,
-    JSON.stringify({ ...state, lastUpdatedAt: new Date().toISOString() })
-  );
-}
-
-function sortByInitiativeDesc(list: Combatant[]) {
-  return [...list].sort((a, b) => {
-    if (b.initiative !== a.initiative) return b.initiative - a.initiative;
-    return a.name.localeCompare(b.name);
-  });
+function saveEncounterLocal(state: EncounterState) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
 function getRoleFromLocalStorage(): "dm" | "player" {
@@ -97,19 +90,31 @@ function getRoleFromLocalStorage(): "dm" | "player" {
   }
 }
 
+async function fetchRemote(room: string): Promise<EncounterState | null> {
+  const res = await fetch(`/api/combat?room=${encodeURIComponent(room)}`, { cache: "no-store" });
+  if (!res.ok) return null;
+  const json = (await res.json()) as { data: EncounterState | null };
+  return json.data ?? null;
+}
+
+async function pushRemote(room: string, state: EncounterState): Promise<void> {
+  await fetch(`/api/combat?room=${encodeURIComponent(room)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(state),
+  });
+}
+
 export default function CombatPage() {
   const [isClient, setIsClient] = useState(false);
   const [role, setRole] = useState<"dm" | "player">("player");
   const isDm = role === "dm";
 
-  const [state, setState] = useState<EncounterState>(() => ({
-    round: 1,
-    turnIndex: 0,
-    combatants: [],
-    lastUpdatedAt: "",
-  }));
+  const [room, setRoom] = useState("default");
+  const [state, setState] = useState<EncounterState>({ round: 1, turnIndex: 0, combatants: [], lastUpdatedAt: "" });
 
   const hasHydrated = useRef(false);
+  const lastRemoteStamp = useRef<string>("");
 
   const [name, setName] = useState("");
   const [kind, setKind] = useState<CombatantType>("Monster");
@@ -124,21 +129,69 @@ export default function CombatPage() {
 
   useEffect(() => {
     setIsClient(true);
+
+    const sp = new URLSearchParams(window.location.search);
+    const r = (sp.get("room") || "default").trim() || "default";
+    setRoom(r);
+
     setRole(getRoleFromLocalStorage());
 
-    const loaded = loadEncounter();
-    setState({ ...loaded, combatants: sortByInitiativeDesc(loaded.combatants) });
+    const local = loadEncounter();
+    setState({ ...local, combatants: sortByInitiativeDesc(local.combatants) });
   }, []);
 
   useEffect(() => {
     if (!isClient) return;
+    (async () => {
+      const remote = await fetchRemote(room);
+      if (!remote) return;
+      lastRemoteStamp.current = remote.lastUpdatedAt || "";
+      setState({ ...remote, combatants: sortByInitiativeDesc(remote.combatants) });
+      saveEncounterLocal(remote);
+    })();
+  }, [isClient, room]);
+
+  useEffect(() => {
+    if (!isClient) return;
+
+    if (isDm) return;
+
+    const t = window.setInterval(async () => {
+      const remote = await fetchRemote(room);
+      if (!remote) return;
+      const stamp = remote.lastUpdatedAt || "";
+      if (stamp && stamp !== lastRemoteStamp.current) {
+        lastRemoteStamp.current = stamp;
+        setState({ ...remote, combatants: sortByInitiativeDesc(remote.combatants) });
+        saveEncounterLocal(remote);
+      }
+    }, 1500);
+
+    return () => window.clearInterval(t);
+  }, [isClient, isDm, room]);
+
+  useEffect(() => {
+    if (!isClient) return;
+
     if (!hasHydrated.current) {
       hasHydrated.current = true;
       return;
     }
+
+    saveEncounterLocal(state);
+
     if (!isDm) return;
-    saveEncounter(state);
-  }, [state, isDm, isClient]);
+
+    const withStamp: EncounterState = { ...state, lastUpdatedAt: new Date().toISOString() };
+
+    const handle = window.setTimeout(async () => {
+      await pushRemote(room, withStamp);
+      lastRemoteStamp.current = withStamp.lastUpdatedAt;
+      setState(withStamp);
+    }, 250);
+
+    return () => window.clearTimeout(handle);
+  }, [state, isDm, isClient, room]);
 
   const ordered = useMemo(() => sortByInitiativeDesc(state.combatants), [state.combatants]);
   const active = ordered.length ? ordered[clamp(state.turnIndex, 0, Math.max(ordered.length - 1, 0))] : null;
@@ -184,10 +237,7 @@ export default function CombatPage() {
     const acN = ac.trim() ? safeInt(ac.trim(), 0) : undefined;
     const hpN = hp.trim() ? safeInt(hp.trim(), 0) : undefined;
     const maxN = maxHp.trim() ? safeInt(maxHp.trim(), 0) : undefined;
-    const conds = conditions
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const conds = conditions.split(",").map((s) => s.trim()).filter(Boolean);
 
     const newC: Combatant = {
       id: uid(),
@@ -212,9 +262,7 @@ export default function CombatPage() {
     setConditions("");
     setNotes("");
 
-    requestAnimationFrame(() =>
-      listRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
-    );
+    requestAnimationFrame(() => listRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }
 
   function removeCombatant(id: string) {
@@ -226,10 +274,7 @@ export default function CombatPage() {
   function updateCombatant(id: string, patch: Partial<Combatant>) {
     if (!isDm) return;
     const preserveId = active?.id;
-    setOrdered(
-      state.combatants.map((c) => (c.id === id ? { ...c, ...patch } : c)),
-      preserveId
-    );
+    setOrdered(state.combatants.map((c) => (c.id === id ? { ...c, ...patch } : c)), preserveId);
   }
 
   function nextTurn() {
@@ -237,9 +282,7 @@ export default function CombatPage() {
     if (ordered.length === 0) return;
     setState((s) => {
       const nextIndex = s.turnIndex + 1;
-      if (nextIndex >= ordered.length) {
-        return { ...s, round: s.round + 1, turnIndex: 0 };
-      }
+      if (nextIndex >= ordered.length) return { ...s, round: s.round + 1, turnIndex: 0 };
       return { ...s, turnIndex: nextIndex };
     });
   }
@@ -250,11 +293,7 @@ export default function CombatPage() {
     setState((s) => {
       const prevIndex = s.turnIndex - 1;
       if (prevIndex < 0) {
-        return {
-          ...s,
-          round: Math.max(1, s.round - 1),
-          turnIndex: Math.max(0, ordered.length - 1),
-        };
+        return { ...s, round: Math.max(1, s.round - 1), turnIndex: Math.max(0, ordered.length - 1) };
       }
       return { ...s, turnIndex: prevIndex };
     });
@@ -279,21 +318,7 @@ export default function CombatPage() {
         <div className="sc-bg" style={{ backgroundImage: "url('/backgrounds/character.jpg')" }} />
         <div className="sc-overlay" />
         <div className="sc-content" style={{ padding: "2rem" }}>
-          <header
-            style={{
-              display: "flex",
-              alignItems: "flex-end",
-              justifyContent: "space-between",
-              gap: "1rem",
-            }}
-          >
-            <div>
-              <h1 style={{ fontSize: "2rem", lineHeight: 1.1 }}>Combat</h1>
-              <p style={{ opacity: 0.85, marginTop: "0.35rem" }}>
-                Quick encounter tracker (local-only for now). Round <strong>1</strong>
-              </p>
-            </div>
-          </header>
+          <h1 style={{ fontSize: "2rem", lineHeight: 1.1 }}>Combat</h1>
         </div>
       </main>
     );
@@ -305,18 +330,11 @@ export default function CombatPage() {
       <div className="sc-overlay" />
 
       <div className="sc-content" style={{ padding: "2rem" }}>
-        <header
-          style={{
-            display: "flex",
-            alignItems: "flex-end",
-            justifyContent: "space-between",
-            gap: "1rem",
-          }}
-        >
+        <header style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: "1rem" }}>
           <div>
             <h1 style={{ fontSize: "2rem", lineHeight: 1.1 }}>Combat</h1>
             <p style={{ opacity: 0.85, marginTop: "0.35rem" }}>
-              Quick encounter tracker (local-only for now). Round <strong>{state.round}</strong>
+              Room <strong>{room}</strong> • Round <strong>{state.round}</strong>
               {active ? (
                 <>
                   {" "}
@@ -348,20 +366,10 @@ export default function CombatPage() {
           </div>
         </header>
 
-        <section
-          style={{
-            display: "grid",
-            gridTemplateColumns: isDm ? "1.1fr 1fr" : "1fr",
-            gap: "1rem",
-            marginTop: "1rem",
-          }}
-        >
+        <section style={{ display: "grid", gridTemplateColumns: isDm ? "1.1fr 1fr" : "1fr", gap: "1rem", marginTop: "1rem" }}>
           {isDm ? (
             <div style={card}>
               <h2 style={{ marginBottom: "0.5rem" }}>Add Combatant</h2>
-              <p style={{ opacity: 0.8, fontSize: "0.95rem", marginBottom: "0.85rem" }}>
-                Enter initiative (or 0), optional AC/HP, and any conditions.
-              </p>
 
               <div style={{ display: "grid", gridTemplateColumns: "1.25fr 0.9fr", gap: "0.75rem" }}>
                 <label style={{ display: "block" }}>
@@ -410,18 +418,13 @@ export default function CombatPage() {
               </div>
 
               <label style={{ display: "block", marginTop: "0.75rem" }}>
-                <div style={label}>Conditions (comma-separated)</div>
-                <input value={conditions} onChange={(e) => setConditions(e.target.value)} style={input} placeholder="e.g., prone, grappled" />
+                <div style={label}>Conditions</div>
+                <input value={conditions} onChange={(e) => setConditions(e.target.value)} style={input} placeholder="prone, grappled" />
               </label>
 
               <label style={{ display: "block", marginTop: "0.75rem" }}>
                 <div style={label}>Notes</div>
-                <textarea
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  style={{ ...input, minHeight: 78, resize: "vertical" }}
-                  placeholder="Legendary resist used, concentrating on..."
-                />
+                <textarea value={notes} onChange={(e) => setNotes(e.target.value)} style={{ ...input, minHeight: 78, resize: "vertical" }} />
               </label>
 
               <div style={{ display: "flex", gap: "0.75rem", marginTop: "0.9rem" }}>
@@ -480,7 +483,6 @@ export default function CombatPage() {
                         style={ghostBtnSmall}
                         onClick={() => updateCombatant(active.id, { hp: active.maxHp ?? active.hp })}
                         disabled={!isDm || typeof active.maxHp !== "number"}
-                        title={typeof active.maxHp !== "number" ? "Set Max HP to use" : "Set HP to Max"}
                       >
                         Full
                       </button>
@@ -501,7 +503,6 @@ export default function CombatPage() {
                             }
                             style={condPill}
                             disabled={!isDm}
-                            title={isDm ? "Click to remove" : undefined}
                           >
                             {cnd}
                           </button>
@@ -538,7 +539,6 @@ export default function CombatPage() {
                     onChange={(e) => updateCombatant(active.id, { notes: e.target.value })}
                     readOnly={!isDm}
                     style={{ ...input, minHeight: 92, resize: "vertical", marginTop: "0.35rem" }}
-                    placeholder="What matters right now…"
                   />
                 </div>
               </div>
@@ -552,7 +552,7 @@ export default function CombatPage() {
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "1rem" }}>
             <h2 style={{ fontSize: "1.25rem" }}>Initiative Order</h2>
             <span style={{ opacity: 0.75, fontSize: "0.9rem" }}>
-              Saved locally • {state.combatants.length} combatant{state.combatants.length === 1 ? "" : "s"}
+              Synced • {state.combatants.length} combatant{state.combatants.length === 1 ? "" : "s"}
             </span>
           </div>
 
@@ -562,14 +562,20 @@ export default function CombatPage() {
                 const isActive = active?.id === c.id;
                 return (
                   <div key={c.id} style={{ ...row, borderColor: isActive ? "#d4af37" : "#222" }}>
-                    <div style={{ textAlign: "left" }}>
+                    <button
+                      onClick={() => focusTurn(c.id)}
+                      disabled={!isDm}
+                      style={{
+                        textAlign: "left",
+                        background: "transparent",
+                        border: "none",
+                        color: "inherit",
+                        cursor: isDm ? "pointer" : "default",
+                        padding: 0,
+                      }}
+                    >
                       <div style={{ display: "flex", gap: "0.6rem", alignItems: "baseline", flexWrap: "wrap" }}>
-                        <span
-                          style={{
-                            ...pill,
-                            background: isActive ? "rgba(212,175,55,0.14)" : "rgba(255,255,255,0.06)",
-                          }}
-                        >
+                        <span style={{ ...pill, background: isActive ? "rgba(212,175,55,0.14)" : "rgba(255,255,255,0.06)" }}>
                           #{idx + 1}
                         </span>
                         <span style={{ fontWeight: 800, fontSize: "1.05rem" }}>{c.name}</span>
@@ -597,7 +603,7 @@ export default function CombatPage() {
                           </>
                         ) : null}
                       </div>
-                    </div>
+                    </button>
 
                     {isDm ? (
                       <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
@@ -606,7 +612,6 @@ export default function CombatPage() {
                           onChange={(e) => updateCombatant(c.id, { initiative: safeInt(e.target.value, 0) })}
                           inputMode="numeric"
                           style={{ ...miniInput, width: 74 }}
-                          title="Initiative"
                         />
                         <input
                           value={typeof c.ac === "number" ? String(c.ac) : ""}
@@ -617,7 +622,6 @@ export default function CombatPage() {
                           inputMode="numeric"
                           style={{ ...miniInput, width: 74 }}
                           placeholder="AC"
-                          title="AC"
                         />
                         <input
                           value={typeof c.hp === "number" ? String(c.hp) : ""}
@@ -628,7 +632,6 @@ export default function CombatPage() {
                           inputMode="numeric"
                           style={{ ...miniInput, width: 74 }}
                           placeholder="HP"
-                          title="HP"
                         />
                         <input
                           value={typeof c.maxHp === "number" ? String(c.maxHp) : ""}
@@ -639,10 +642,8 @@ export default function CombatPage() {
                           inputMode="numeric"
                           style={{ ...miniInput, width: 74 }}
                           placeholder="Max"
-                          title="Max HP"
                         />
-
-                        <button onClick={() => removeCombatant(c.id)} style={dangerBtnSmall} title="Remove">
+                        <button onClick={() => removeCombatant(c.id)} style={dangerBtnSmall}>
                           Remove
                         </button>
                       </div>
@@ -665,11 +666,7 @@ export default function CombatPage() {
 function HpPill({ c }: { c: Combatant }) {
   const hp = typeof c.hp === "number" ? c.hp : undefined;
   const max = typeof c.maxHp === "number" ? c.maxHp : undefined;
-
-  if (hp === undefined && max === undefined) {
-    return <span style={{ opacity: 0.7 }}>—</span>;
-  }
-
+  if (hp === undefined && max === undefined) return <span style={{ opacity: 0.7 }}>—</span>;
   const label = hp === undefined ? `—/${max}` : max === undefined ? `${hp}` : `${hp}/${max}`;
   return <span style={{ ...pill, background: "rgba(255,255,255,0.07)" }}>{label}</span>;
 }
@@ -690,10 +687,10 @@ function HpAdjust({ c, onChange }: { c: Combatant; onChange: (nextHp: number) =>
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
-      <button style={ghostBtnSmall} onClick={dec} title="-1 HP">
+      <button style={ghostBtnSmall} onClick={dec}>
         -
       </button>
-      <button style={ghostBtnSmall} onClick={inc} title="+1 HP">
+      <button style={ghostBtnSmall} onClick={inc}>
         +
       </button>
     </div>
