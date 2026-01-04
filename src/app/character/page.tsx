@@ -1,0 +1,1270 @@
+"use client";
+
+import React, { useEffect, useMemo, useState } from "react";
+import spellsData from "../../data/spells.json";
+import traitsData from "../../data/traits.json";
+
+type Ability = "STR" | "DEX" | "CON" | "INT" | "WIS" | "CHA";
+
+type SkillKey =
+  | "Acrobatics"
+  | "Animal Handling"
+  | "Arcana"
+  | "Athletics"
+  | "Deception"
+  | "History"
+  | "Insight"
+  | "Intimidation"
+  | "Investigation"
+  | "Medicine"
+  | "Nature"
+  | "Perception"
+  | "Performance"
+  | "Persuasion"
+  | "Religion"
+  | "Sleight of Hand"
+  | "Stealth"
+  | "Survival";
+
+type TraitEntry = {
+  id: string;
+  sourceBook: string;
+  background: string;
+  type: "Personality Trait" | "Ideal" | "Bond" | "Flaw";
+  text: string;
+};
+
+const TRAITS = traitsData as TraitEntry[];
+
+const SKILLS: { key: SkillKey; ability: Ability }[] = [
+  { key: "Acrobatics", ability: "DEX" },
+  { key: "Animal Handling", ability: "WIS" },
+  { key: "Arcana", ability: "INT" },
+  { key: "Athletics", ability: "STR" },
+  { key: "Deception", ability: "CHA" },
+  { key: "History", ability: "INT" },
+  { key: "Insight", ability: "WIS" },
+  { key: "Intimidation", ability: "CHA" },
+  { key: "Investigation", ability: "INT" },
+  { key: "Medicine", ability: "WIS" },
+  { key: "Nature", ability: "INT" },
+  { key: "Perception", ability: "WIS" },
+  { key: "Performance", ability: "CHA" },
+  { key: "Persuasion", ability: "CHA" },
+  { key: "Religion", ability: "INT" },
+  { key: "Sleight of Hand", ability: "DEX" },
+  { key: "Stealth", ability: "DEX" },
+  { key: "Survival", ability: "WIS" },
+];
+
+type Weapon = {
+  name: string;
+  toHitBonus: number;
+  damageBonus: number;
+  magicalEffects: string;
+};
+
+type Armor = {
+  name: string;
+  acBonus: number;
+  dexCap: number | null;
+  notes: string;
+};
+
+type Spell = {
+  id: string;
+  name: string;
+  level: number;
+  school?: string;
+  castingTime?: string;
+  range?: string;
+  components?: string;
+  duration?: string;
+  description: string;
+};
+
+const SPELLS = spellsData as Spell[];
+
+type CharacterSheet = {
+  name: string;
+  className: string;
+  level: number;
+
+  experience: number;
+
+  abilities: Record<Ability, number>;
+  savingThrowProficiencies: Partial<Record<Ability, boolean>>;
+  skillProficiencies: Partial<Record<SkillKey, boolean>>;
+
+  maxHp: number;
+  currentHp: number;
+  tempHp: number;
+
+  baseAc: number;
+  initiativeBonus: number;
+  speed: number;
+
+  inventory: string[];
+
+  weapons: Weapon[];
+  armor: Armor | null;
+
+  background: string;
+  personalityTrait: string;
+  ideal: string;
+  bond: string;
+  flaw: string;
+
+  traits: string[];
+
+  cantripIds: string[];
+  spellIdsByLevel: Record<number, string[]>;
+  spellSlotsMax: Record<number, number>;
+  spellSlotsUsed: Record<number, number>;
+};
+
+const STORAGE_KEY = "stonecross.character.v1";
+
+const XP_FOR_LEVEL: Record<number, number> = {
+  1: 0,
+  2: 300,
+  3: 900,
+  4: 2700,
+  5: 6500,
+  6: 14000,
+  7: 23000,
+  8: 34000,
+  9: 48000,
+  10: 64000,
+  11: 85000,
+  12: 100000,
+  13: 120000,
+  14: 140000,
+  15: 165000,
+  16: 195000,
+  17: 225000,
+  18: 265000,
+  19: 305000,
+  20: 355000,
+};
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function abilityMod(score: number) {
+  return Math.floor((score - 10) / 2);
+}
+
+function fmtSigned(n: number) {
+  return n >= 0 ? `+${n}` : `${n}`;
+}
+
+function profBonusForLevel(level: number) {
+  const l = clamp(level, 1, 20);
+  if (l >= 17) return 6;
+  if (l >= 13) return 5;
+  if (l >= 9) return 4;
+  if (l >= 5) return 3;
+  return 2;
+}
+
+function nextLevelXp(level: number) {
+  const l = clamp(level, 1, 20);
+  if (l >= 20) return null;
+  return XP_FOR_LEVEL[l + 1];
+}
+
+function defaultSheet(): CharacterSheet {
+  return {
+    name: "Unnamed Hero",
+    className: "Fighter",
+    level: 1,
+
+    experience: 0,
+
+    abilities: { STR: 10, DEX: 10, CON: 10, INT: 10, WIS: 10, CHA: 10 },
+    savingThrowProficiencies: {},
+    skillProficiencies: {},
+
+    maxHp: 10,
+    currentHp: 10,
+    tempHp: 0,
+
+    baseAc: 10,
+    initiativeBonus: 0,
+    speed: 30,
+
+    inventory: ["Rations", "Torch", "Rope (50 ft)"],
+
+    weapons: [
+      { name: "Longsword", toHitBonus: 0, damageBonus: 0, magicalEffects: "" },
+    ],
+    armor: { name: "Leather Armor", acBonus: 0, dexCap: null, notes: "" },
+
+    background: "",
+    personalityTrait: "",
+    ideal: "",
+    bond: "",
+    flaw: "",
+
+    traits: ["Darkvision"],
+
+    cantripIds: [],
+    spellIdsByLevel: {
+      1: [],
+      2: [],
+      3: [],
+      4: [],
+      5: [],
+      6: [],
+      7: [],
+      8: [],
+      9: [],
+    },
+    spellSlotsMax: { 1: 2, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0 },
+    spellSlotsUsed: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0 },
+  };
+}
+
+function normalizeSheet(raw: any): CharacterSheet {
+  const base = defaultSheet();
+
+  const merged: CharacterSheet = {
+    ...base,
+    ...(raw ?? {}),
+    level: clamp(Number(raw?.level ?? base.level), 1, 20),
+    experience: clamp(Number(raw?.experience ?? base.experience), 0, XP_FOR_LEVEL[20]),
+    abilities: { ...base.abilities, ...(raw?.abilities ?? {}) },
+    savingThrowProficiencies: { ...(raw?.savingThrowProficiencies ?? {}) },
+    skillProficiencies: { ...(raw?.skillProficiencies ?? {}) },
+    inventory: Array.isArray(raw?.inventory) ? raw.inventory : base.inventory,
+    weapons: Array.isArray(raw?.weapons) ? raw.weapons : base.weapons,
+    armor: raw?.armor ?? base.armor,
+    traits: Array.isArray(raw?.traits) ? raw.traits : base.traits,
+    cantripIds: Array.isArray(raw?.cantripIds) ? raw.cantripIds : base.cantripIds,
+    spellIdsByLevel: { ...base.spellIdsByLevel, ...(raw?.spellIdsByLevel ?? {}) },
+    spellSlotsMax: { ...base.spellSlotsMax, ...(raw?.spellSlotsMax ?? {}) },
+    spellSlotsUsed: { ...base.spellSlotsUsed, ...(raw?.spellSlotsUsed ?? {}) },
+    background: typeof raw?.background === "string" ? raw.background : base.background,
+    personalityTrait: typeof raw?.personalityTrait === "string" ? raw.personalityTrait : base.personalityTrait,
+    ideal: typeof raw?.ideal === "string" ? raw.ideal : base.ideal,
+    bond: typeof raw?.bond === "string" ? raw.bond : base.bond,
+    flaw: typeof raw?.flaw === "string" ? raw.flaw : base.flaw,
+  };
+
+  return merged;
+}
+
+function loadSheet(): CharacterSheet {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return defaultSheet();
+    const parsed = JSON.parse(raw);
+    if (!parsed?.abilities) return defaultSheet();
+    return normalizeSheet(parsed);
+  } catch {
+    return defaultSheet();
+  }
+}
+
+function saveSheet(sheet: CharacterSheet) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(sheet));
+}
+
+export default function CharacterPage() {
+  const [sheet, setSheet] = useState<CharacterSheet | null>(null);
+  const [selectedSpellId, setSelectedSpellId] = useState<string>("");
+
+  useEffect(() => {
+    setSheet(loadSheet());
+  }, []);
+
+  useEffect(() => {
+    if (sheet) saveSheet(sheet);
+  }, [sheet]);
+
+  const spellsById = useMemo(() => {
+    const m = new Map<string, Spell>();
+    for (const s of SPELLS) m.set(s.id, s);
+    return m;
+  }, []);
+
+  const cantrips = useMemo(() => SPELLS.filter((s) => s.level === 0), []);
+  const leveledSpells = useMemo(() => SPELLS.filter((s) => s.level > 0), []);
+
+  if (!sheet) {
+    return (
+      <main className="sc-page">
+        <div className="sc-bg" style={{ backgroundImage: "url('/backgrounds/character.jpg')" }} />
+        <div className="sc-overlay" />
+        <div className="sc-content" style={{ padding: "2rem" }}>
+          <h1>Character</h1>
+          <p>Loading...</p>
+        </div>
+      </main>
+    );
+  }
+
+  const proficiencyBonus = profBonusForLevel(sheet.level);
+  const nextXp = nextLevelXp(sheet.level);
+  const xpToNext = nextXp === null ? 0 : Math.max(0, nextXp - sheet.experience);
+
+  const dexMod = abilityMod(sheet.abilities.DEX);
+  const armorAc =
+    sheet.armor
+      ? sheet.baseAc +
+        sheet.armor.acBonus +
+        Math.min(dexMod, sheet.armor.dexCap ?? dexMod)
+      : sheet.baseAc + dexMod;
+
+  const selectedSpell = selectedSpellId ? spellsById.get(selectedSpellId) : undefined;
+
+  function update<K extends keyof CharacterSheet>(key: K, value: CharacterSheet[K]) {
+    setSheet({ ...sheet, [key]: value });
+  }
+
+  function ensureSpellExists(id: string) {
+    return spellsById.has(id);
+  }
+
+  const safeCantripIds = sheet.cantripIds.filter(ensureSpellExists);
+  const safeSpellIdsByLevel: CharacterSheet["spellIdsByLevel"] = { ...sheet.spellIdsByLevel };
+  for (const lvl of [1, 2, 3, 4, 5, 6, 7, 8, 9]) {
+    safeSpellIdsByLevel[lvl] = (sheet.spellIdsByLevel[lvl] ?? []).filter(ensureSpellExists);
+  }
+
+  const BACKGROUNDS = Array.from(new Set(TRAITS.map((t) => t.background))).sort();
+
+  return (
+    <main className="sc-page">
+      <div className="sc-bg" style={{ backgroundImage: "url('/backgrounds/character.jpg')" }} />
+      <div className="sc-overlay" />
+      <div className="sc-content" style={{ padding: "2rem" }}>
+        <h1 style={{ marginBottom: "0.5rem" }}>Character Sheet</h1>
+
+        <section style={cardStyle}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr 120px 160px 200px",
+              gap: "1rem",
+            }}
+          >
+            <Field label="Name">
+              <input
+                value={sheet.name}
+                onChange={(e) => update("name", e.target.value)}
+                style={inputStyle}
+              />
+            </Field>
+
+            <Field label="Class">
+              <input
+                value={sheet.className}
+                onChange={(e) => update("className", e.target.value)}
+                style={inputStyle}
+              />
+            </Field>
+
+            <Field label="Level">
+              <input
+                type="number"
+                value={sheet.level}
+                onChange={(e) => update("level", clamp(Number(e.target.value), 1, 20))}
+                style={inputStyle}
+              />
+            </Field>
+
+            <Field label="Experience">
+              <input
+                type="number"
+                value={sheet.experience}
+                onChange={(e) =>
+                  update("experience", clamp(Number(e.target.value), 0, XP_FOR_LEVEL[20]))
+                }
+                style={inputStyle}
+              />
+            </Field>
+
+            <Field label="XP to Next Level">
+              <input
+                value={nextXp === null ? "—" : String(xpToNext)}
+                readOnly
+                style={{ ...inputStyle, opacity: 0.9 }}
+              />
+            </Field>
+          </div>
+
+          <div style={{ marginTop: "0.75rem", opacity: 0.9 }}>
+            Proficiency Bonus: <strong>{fmtSigned(proficiencyBonus)}</strong>
+            {nextXp !== null ? (
+              <>
+                {" "}
+                • Next level at <strong>{nextXp}</strong> XP
+              </>
+            ) : (
+              <>
+                {" "}
+                • <strong>Max level</strong>
+              </>
+            )}
+          </div>
+        </section>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "360px 1fr",
+            gap: "1rem",
+            marginTop: "1rem",
+          }}
+        >
+          <section style={cardStyle}>
+            <h2 style={h2}>Abilities</h2>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
+              {(["STR", "DEX", "CON", "INT", "WIS", "CHA"] as Ability[]).map((ab) => {
+                const score = sheet.abilities[ab];
+                const mod = abilityMod(score);
+                return (
+                  <div key={ab} style={miniCardStyle}>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <strong>{ab}</strong>
+                      <span style={{ opacity: 0.9 }}>{fmtSigned(mod)}</span>
+                    </div>
+
+                    <input
+                      type="number"
+                      value={score}
+                      onChange={(e) =>
+                        update("abilities", {
+                          ...sheet.abilities,
+                          [ab]: clamp(Number(e.target.value), 1, 30),
+                        })
+                      }
+                      style={inputStyle}
+                    />
+
+                    <label
+                      style={{
+                        display: "flex",
+                        gap: "0.5rem",
+                        alignItems: "center",
+                        marginTop: "0.35rem",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={!!sheet.savingThrowProficiencies[ab]}
+                        onChange={(e) =>
+                          update("savingThrowProficiencies", {
+                            ...sheet.savingThrowProficiencies,
+                            [ab]: e.target.checked,
+                          })
+                        }
+                      />
+                      <span style={{ fontSize: "0.9rem", opacity: 0.9 }}>
+                        Saving throw prof.
+                      </span>
+                    </label>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          <section style={cardStyle}>
+            <h2 style={h2}>Combat</h2>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "1rem" }}>
+              <Stat label="AC" value={armorAc} />
+              <Stat label="Initiative" value={fmtSigned(sheet.initiativeBonus + dexMod)} />
+              <Stat label="Speed" value={`${sheet.speed} ft`} />
+              <Stat label="HP" value={`${sheet.currentHp}/${sheet.maxHp} (+${sheet.tempHp} temp)`} />
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "1rem", marginTop: "1rem" }}>
+              <Field label="Max HP">
+                <input
+                  type="number"
+                  value={sheet.maxHp}
+                  onChange={(e) => update("maxHp", clamp(Number(e.target.value), 1, 999))}
+                  style={inputStyle}
+                />
+              </Field>
+              <Field label="Current HP">
+                <input
+                  type="number"
+                  value={sheet.currentHp}
+                  onChange={(e) => update("currentHp", clamp(Number(e.target.value), 0, 999))}
+                  style={inputStyle}
+                />
+              </Field>
+              <Field label="Temp HP">
+                <input
+                  type="number"
+                  value={sheet.tempHp}
+                  onChange={(e) => update("tempHp", clamp(Number(e.target.value), 0, 999))}
+                  style={inputStyle}
+                />
+              </Field>
+            </div>
+          </section>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginTop: "1rem" }}>
+          <section style={cardStyle}>
+            <h2 style={h2}>Skills</h2>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
+              {SKILLS.map((s) => {
+                const mod = abilityMod(sheet.abilities[s.ability]);
+                const prof = sheet.skillProficiencies[s.key] ? proficiencyBonus : 0;
+                const total = mod + prof;
+                return (
+                  <label
+                    key={s.key}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: "0.5rem",
+                      padding: "0.35rem 0.5rem",
+                      border: "1px solid #222",
+                      borderRadius: 10,
+                    }}
+                  >
+                    <span>
+                      <input
+                        type="checkbox"
+                        checked={!!sheet.skillProficiencies[s.key]}
+                        onChange={(e) =>
+                          update("skillProficiencies", {
+                            ...sheet.skillProficiencies,
+                            [s.key]: e.target.checked,
+                          })
+                        }
+                        style={{ marginRight: "0.5rem" }}
+                      />
+                      {s.key} <span style={{ opacity: 0.7 }}>({s.ability})</span>
+                    </span>
+                    <strong>{fmtSigned(total)}</strong>
+                  </label>
+                );
+              })}
+            </div>
+          </section>
+
+          <section style={cardStyle}>
+            <h2 style={h2}>Inventory</h2>
+            <ul style={{ marginLeft: "1rem" }}>
+              {sheet.inventory.map((it, idx) => (
+                <li key={`${it}-${idx}`} style={{ margin: "0.25rem 0" }}>
+                  {it}{" "}
+                  <button
+                    onClick={() => update("inventory", sheet.inventory.filter((_, i) => i !== idx))}
+                    style={linkBtnStyle}
+                  >
+                    remove
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <AddRow
+              placeholder="Add an item (e.g., Healing Potion)"
+              onAdd={(v) => update("inventory", [...sheet.inventory, v])}
+            />
+          </section>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginTop: "1rem" }}>
+          <section style={cardStyle}>
+            <h2 style={h2}>Weapons</h2>
+            {sheet.weapons.map((w, idx) => (
+              <div key={`${w.name}-${idx}`} style={miniCardStyle}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 90px 110px 1fr", gap: "0.75rem", alignItems: "end" }}>
+                  <Field label="Name">
+                    <input
+                      value={w.name}
+                      onChange={(e) => {
+                        const next = [...sheet.weapons];
+                        next[idx] = { ...w, name: e.target.value };
+                        update("weapons", next);
+                      }}
+                      style={inputStyle}
+                    />
+                  </Field>
+
+                  <Field label="+ To Hit">
+                    <input
+                      type="number"
+                      value={w.toHitBonus}
+                      onChange={(e) => {
+                        const next = [...sheet.weapons];
+                        next[idx] = { ...w, toHitBonus: Number(e.target.value) };
+                        update("weapons", next);
+                      }}
+                      style={inputStyle}
+                    />
+                  </Field>
+
+                  <Field label="+ Damage">
+                    <input
+                      type="number"
+                      value={w.damageBonus}
+                      onChange={(e) => {
+                        const next = [...sheet.weapons];
+                        next[idx] = { ...w, damageBonus: Number(e.target.value) };
+                        update("weapons", next);
+                      }}
+                      style={inputStyle}
+                    />
+                  </Field>
+
+                  <Field label="Magical Effects / Notes">
+                    <input
+                      value={w.magicalEffects}
+                      onChange={(e) => {
+                        const next = [...sheet.weapons];
+                        next[idx] = { ...w, magicalEffects: e.target.value };
+                        update("weapons", next);
+                      }}
+                      style={inputStyle}
+                    />
+                  </Field>
+                </div>
+
+                <button
+                  onClick={() => update("weapons", sheet.weapons.filter((_, i) => i !== idx))}
+                  style={{ ...linkBtnStyle, marginTop: "0.5rem" }}
+                >
+                  remove weapon
+                </button>
+              </div>
+            ))}
+
+            <button
+              onClick={() =>
+                update("weapons", [
+                  ...sheet.weapons,
+                  { name: "New Weapon", toHitBonus: 0, damageBonus: 0, magicalEffects: "" },
+                ])
+              }
+              style={btnStyle}
+            >
+              + Add Weapon
+            </button>
+          </section>
+
+          <section style={cardStyle}>
+            <h2 style={h2}>Armor</h2>
+            {sheet.armor ? (
+              <>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 120px", gap: "0.75rem" }}>
+                  <Field label="Armor Name">
+                    <input
+                      value={sheet.armor.name}
+                      onChange={(e) => update("armor", { ...sheet.armor!, name: e.target.value })}
+                      style={inputStyle}
+                    />
+                  </Field>
+
+                  <Field label="+ AC">
+                    <input
+                      type="number"
+                      value={sheet.armor.acBonus}
+                      onChange={(e) => update("armor", { ...sheet.armor!, acBonus: Number(e.target.value) })}
+                      style={inputStyle}
+                    />
+                  </Field>
+
+                  <Field label="Dex Cap">
+                    <input
+                      type="number"
+                      value={sheet.armor.dexCap ?? ""}
+                      placeholder="none"
+                      onChange={(e) => {
+                        const v = e.target.value.trim();
+                        update("armor", { ...sheet.armor!, dexCap: v === "" ? null : Number(v) });
+                      }}
+                      style={inputStyle}
+                    />
+                  </Field>
+                </div>
+
+                <Field label="Notes" style={{ marginTop: "0.75rem" }}>
+                  <input
+                    value={sheet.armor.notes}
+                    onChange={(e) => update("armor", { ...sheet.armor!, notes: e.target.value })}
+                    style={inputStyle}
+                  />
+                </Field>
+
+                <p style={{ marginTop: "0.75rem", opacity: 0.9 }}>
+                  Calculated AC: <strong>{armorAc}</strong>
+                </p>
+
+                <button onClick={() => update("armor", null)} style={btnStyle}>
+                  Remove Armor
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => update("armor", { name: "Armor", acBonus: 0, dexCap: null, notes: "" })}
+                style={btnStyle}
+              >
+                + Add Armor
+              </button>
+            )}
+          </section>
+        </div>
+
+        <section style={{ ...cardStyle, marginTop: "1rem" }}>
+          <h2 style={h2}>Spellcasting</h2>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "1rem" }}>
+            <div style={miniCardStyle}>
+              <h3 style={h3}>Cantrips</h3>
+
+              <SpellSearchAdd
+                label="Search & add cantrip"
+                options={cantrips}
+                disabledIds={safeCantripIds}
+                onAdd={(id) => update("cantripIds", [...safeCantripIds, id])}
+              />
+
+              <SelectedSpellList
+                ids={safeCantripIds}
+                spellsById={spellsById}
+                onRemove={(id) => update("cantripIds", safeCantripIds.filter((x) => x !== id))}
+                onInspect={(id) => setSelectedSpellId(id)}
+              />
+            </div>
+
+            <div style={miniCardStyle}>
+              <h3 style={h3}>Spell Description</h3>
+              {selectedSpell ? (
+                <div style={{ lineHeight: 1.35 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem" }}>
+                    <strong>{selectedSpell.name}</strong>
+                    <span style={{ opacity: 0.8 }}>
+                      {selectedSpell.level === 0 ? "Cantrip" : `Level ${selectedSpell.level}`}
+                    </span>
+                  </div>
+
+                  <div style={{ marginTop: "0.5rem", opacity: 0.9 }}>
+                    {selectedSpell.school ? (
+                      <div>
+                        <strong>School:</strong> {selectedSpell.school}
+                      </div>
+                    ) : null}
+                    {selectedSpell.castingTime ? (
+                      <div>
+                        <strong>Casting Time:</strong> {selectedSpell.castingTime}
+                      </div>
+                    ) : null}
+                    {selectedSpell.range ? (
+                      <div>
+                        <strong>Range:</strong> {selectedSpell.range}
+                      </div>
+                    ) : null}
+                    {selectedSpell.components ? (
+                      <div>
+                        <strong>Components:</strong> {selectedSpell.components}
+                      </div>
+                    ) : null}
+                    {selectedSpell.duration ? (
+                      <div>
+                        <strong>Duration:</strong> {selectedSpell.duration}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <p style={{ marginTop: "0.75rem" }}>{selectedSpell.description}</p>
+                </div>
+              ) : (
+                <p style={{ opacity: 0.8 }}>
+                  Click a selected spell/cantrip to view details here.
+                </p>
+              )}
+            </div>
+
+            <div style={miniCardStyle}>
+              <h3 style={h3}>Background & Traits</h3>
+
+              <Field label="Background">
+                <select
+                  value={sheet.background}
+                  onChange={(e) => {
+                    const b = e.target.value;
+                    setSheet({
+                      ...sheet,
+                      background: b,
+                      personalityTrait: "",
+                      ideal: "",
+                      bond: "",
+                      flaw: "",
+                    });
+                  }}
+                  style={inputStyle}
+                >
+                  <option value="">Select…</option>
+                  {BACKGROUNDS.map((b) => (
+  <option key={b} value={b}>
+    {b}
+  </option>
+))}
+                </select>
+              </Field>
+
+              {sheet.background ? (
+                <div style={{ marginTop: "0.75rem" }}>
+                  <div style={{ marginTop: "0.75rem" }}>
+                    <strong style={{ display: "block", marginBottom: "0.25rem" }}>
+                      Personality Trait
+                    </strong>
+                    <TraitPicker
+                      entries={TRAITS.filter(
+                        (t) => t.background === sheet.background && t.type === "Personality Trait"
+                      )}
+                      value={sheet.personalityTrait}
+                      onPick={(v) => update("personalityTrait", v)}
+                    />
+                  </div>
+
+                  <div style={{ marginTop: "0.75rem" }}>
+                    <strong style={{ display: "block", marginBottom: "0.25rem" }}>Ideal</strong>
+                    <TraitPicker
+                      entries={TRAITS.filter(
+                        (t) => t.background === sheet.background && t.type === "Ideal"
+                      )}
+                      value={sheet.ideal}
+                      onPick={(v) => update("ideal", v)}
+                    />
+                  </div>
+
+                  <div style={{ marginTop: "0.75rem" }}>
+                    <strong style={{ display: "block", marginBottom: "0.25rem" }}>Bond</strong>
+                    <TraitPicker
+                      entries={TRAITS.filter(
+                        (t) => t.background === sheet.background && t.type === "Bond"
+                      )}
+                      value={sheet.bond}
+                      onPick={(v) => update("bond", v)}
+                    />
+                  </div>
+
+                  <div style={{ marginTop: "0.75rem" }}>
+                    <strong style={{ display: "block", marginBottom: "0.25rem" }}>Flaw</strong>
+                    <TraitPicker
+                      entries={TRAITS.filter(
+                        (t) => t.background === sheet.background && t.type === "Flaw"
+                      )}
+                      value={sheet.flaw}
+                      onPick={(v) => update("flaw", v)}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <p style={{ marginTop: "0.75rem", opacity: 0.8 }}>
+                  Pick a background to choose Personality Trait, Ideal, Bond, and Flaw.
+                </p>
+              )}
+
+              <hr style={{ border: "none", borderTop: "1px solid #222", margin: "1rem 0" }} />
+
+              <h3 style={h3}>Features</h3>
+              <ul style={{ marginLeft: "1rem" }}>
+                {sheet.traits.map((t, idx) => (
+                  <li key={`${t}-${idx}`} style={{ margin: "0.25rem 0" }}>
+                    {t}{" "}
+                    <button
+                      onClick={() => update("traits", sheet.traits.filter((_, i) => i !== idx))}
+                      style={linkBtnStyle}
+                    >
+                      remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+
+              <AddRow
+                placeholder="Add a feature (e.g., Darkvision, Rage, Lucky)"
+                onAdd={(v) => update("traits", [...sheet.traits, v])}
+              />
+            </div>
+          </div>
+
+          <div style={{ marginTop: "1rem" }}>
+            <h3 style={h3}>Spells & Slots</h3>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "1rem" }}>
+              <div style={miniCardStyle}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.75rem" }}>
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((lvl) => {
+                    const ids = safeSpellIdsByLevel[lvl] ?? [];
+                    const optionsForLevel = leveledSpells.filter((s) => s.level === lvl);
+
+                    return (
+                      <div
+                        key={lvl}
+                        style={{
+                          border: "1px solid #222",
+                          borderRadius: 12,
+                          padding: "0.75rem",
+                          background: "rgba(0,0,0,0.2)",
+                        }}
+                      >
+                        <strong>Level {lvl}</strong>
+
+                        <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
+                          <Field label="Max">
+                            <input
+                              type="number"
+                              value={sheet.spellSlotsMax[lvl]}
+                              onChange={(e) =>
+                                update("spellSlotsMax", {
+                                  ...sheet.spellSlotsMax,
+                                  [lvl]: clamp(Number(e.target.value), 0, 99),
+                                })
+                              }
+                              style={inputStyle}
+                            />
+                          </Field>
+                          <Field label="Used">
+                            <input
+                              type="number"
+                              value={sheet.spellSlotsUsed[lvl]}
+                              onChange={(e) =>
+                                update("spellSlotsUsed", {
+                                  ...sheet.spellSlotsUsed,
+                                  [lvl]: clamp(Number(e.target.value), 0, 99),
+                                })
+                              }
+                              style={inputStyle}
+                            />
+                          </Field>
+                        </div>
+
+                        <div style={{ marginTop: "0.75rem" }}>
+                          <SpellSearchAdd
+                            label="Search & add spell"
+                            options={optionsForLevel}
+                            disabledIds={ids}
+                            onAdd={(id) =>
+                              update("spellIdsByLevel", {
+                                ...sheet.spellIdsByLevel,
+                                [lvl]: [...ids, id],
+                              })
+                            }
+                          />
+
+                          <SelectedSpellList
+                            ids={ids}
+                            spellsById={spellsById}
+                            onRemove={(id) =>
+                              update("spellIdsByLevel", {
+                                ...sheet.spellIdsByLevel,
+                                [lvl]: ids.filter((x) => x !== id),
+                              })
+                            }
+                            onInspect={(id) => setSelectedSpellId(id)}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <p style={{ marginTop: "1rem", opacity: 0.8 }}>
+          Tip: This page saves automatically (localStorage). Later we’ll tie it to login + database.
+        </p>
+      </div>
+    </main>
+  );
+}
+
+function TraitPicker({
+  entries,
+  value,
+  onPick,
+}: {
+  entries: { id: string; text: string; sourceBook?: string }[];
+  value: string;
+  onPick: (v: string) => void;
+}) {
+  const [q, setQ] = useState("");
+
+  const results = useMemo(() => {
+    const query = q.trim().toLowerCase();
+    if (!query) return entries.slice(0, 6);
+    return entries.filter((e) => e.text.toLowerCase().includes(query)).slice(0, 10);
+  }, [q, entries]);
+
+  return (
+    <div>
+      <input
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder="Search…"
+        style={inputStyle}
+      />
+
+      <div style={{ marginTop: "0.5rem", opacity: 0.9, lineHeight: 1.35 }}>
+        {value ? (
+          <div style={{ padding: "0.6rem 0.75rem", border: "1px solid #222", borderRadius: 12 }}>
+            {value}{" "}
+            <button onClick={() => onPick("")} style={linkBtnStyle}>
+              clear
+            </button>
+          </div>
+        ) : (
+          <div style={{ opacity: 0.8 }}>No selection yet.</div>
+        )}
+      </div>
+
+      <div style={{ marginTop: "0.5rem", border: "1px solid #222", borderRadius: 12, overflow: "hidden" }}>
+        {results.map((e, i) => (
+          <button
+            key={e.id}
+            onClick={() => {
+              onPick(e.text);
+              setQ("");
+            }}
+            style={{
+              display: "block",
+              width: "100%",
+              textAlign: "left",
+              padding: "0.6rem 0.8rem",
+              border: "none",
+              borderTop: i === 0 ? "none" : "1px solid #222",
+              background: "rgba(0,0,0,0.35)",
+              color: "white",
+              cursor: "pointer",
+            }}
+          >
+            {e.text}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  children,
+  style,
+}: {
+  label: string;
+  children: React.ReactNode;
+  style?: React.CSSProperties;
+}) {
+  return (
+    <label style={{ display: "block", ...style }}>
+      <div style={{ fontSize: "0.85rem", opacity: 0.85, marginBottom: "0.25rem" }}>
+        {label}
+      </div>
+      {children}
+    </label>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div style={miniCardStyle}>
+      <div style={{ fontSize: "0.85rem", opacity: 0.85 }}>{label}</div>
+      <div style={{ fontSize: "1.35rem", fontWeight: 700, marginTop: "0.25rem" }}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function AddRow({
+  placeholder,
+  onAdd,
+}: {
+  placeholder: string;
+  onAdd: (value: string) => void;
+}) {
+  const [v, setV] = useState("");
+  return (
+    <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem" }}>
+      <input
+        value={v}
+        onChange={(e) => setV(e.target.value)}
+        placeholder={placeholder}
+        style={inputStyle}
+      />
+      <button
+        onClick={() => {
+          const t = v.trim();
+          if (!t) return;
+          onAdd(t);
+          setV("");
+        }}
+        style={btnStyle}
+      >
+        Add
+      </button>
+    </div>
+  );
+}
+
+function SpellSearchAdd({
+  label,
+  options,
+  disabledIds,
+  onAdd,
+}: {
+  label: string;
+  options: Spell[];
+  disabledIds: string[];
+  onAdd: (id: string) => void;
+}) {
+  const [q, setQ] = useState("");
+
+  const results = useMemo(() => {
+    const query = q.trim().toLowerCase();
+    if (!query) return [];
+    return options
+      .filter((s) => !disabledIds.includes(s.id))
+      .filter((s) => s.name.toLowerCase().includes(query))
+      .slice(0, 20);
+  }, [q, options, disabledIds]);
+
+  return (
+    <div style={{ marginTop: "0.5rem" }}>
+      <Field label={label}>
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Type to search…"
+          style={inputStyle}
+        />
+      </Field>
+
+      {q.trim() && (
+        <div
+          style={{
+            marginTop: "0.5rem",
+            border: "1px solid #222",
+            borderRadius: 12,
+            overflow: "hidden",
+            background: "rgba(0,0,0,0.25)",
+          }}
+        >
+          {results.length === 0 ? (
+            <div style={{ padding: "0.6rem 0.8rem", opacity: 0.8 }}>
+              No matches.
+            </div>
+          ) : (
+            results.map((s, i) => (
+              <button
+                key={s.id}
+                onClick={() => {
+                  onAdd(s.id);
+                  setQ("");
+                }}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  padding: "0.6rem 0.8rem",
+                  border: "none",
+                  borderTop: i === 0 ? "none" : "1px solid #222",
+                  background: "rgba(0,0,0,0.35)",
+                  color: "white",
+                  cursor: "pointer",
+                }}
+                title={`Add ${s.name}`}
+              >
+                {s.name}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SelectedSpellList({
+  ids,
+  spellsById,
+  onRemove,
+  onInspect,
+}: {
+  ids: string[];
+  spellsById: Map<string, Spell>;
+  onRemove: (id: string) => void;
+  onInspect: (id: string) => void;
+}) {
+  if (!ids.length) return <p style={{ opacity: 0.75, marginTop: "0.5rem" }}>None selected.</p>;
+
+  return (
+    <ul style={{ marginTop: "0.5rem", paddingLeft: "1rem" }}>
+      {ids.map((id) => {
+        const s = spellsById.get(id);
+        if (!s) return null;
+        return (
+          <li key={id} style={{ margin: "0.25rem 0" }}>
+            <button onClick={() => onInspect(id)} style={linkBtnStyle}>
+              {s.name}
+            </button>{" "}
+            <button onClick={() => onRemove(id)} style={linkBtnStyle}>
+              remove
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+const cardStyle: React.CSSProperties = {
+  border: "1px solid #222",
+  borderRadius: 16,
+  padding: "1rem",
+  background: "rgba(10,10,10,0.55)",
+  backdropFilter: "blur(4px)",
+};
+
+const miniCardStyle: React.CSSProperties = {
+  border: "1px solid #222",
+  borderRadius: 14,
+  padding: "0.75rem",
+  background: "rgba(0,0,0,0.35)",
+};
+
+const inputStyle: React.CSSProperties = {
+  width: "100%",
+  padding: "0.6rem 0.7rem",
+  borderRadius: 12,
+  border: "1px solid #333",
+  background: "rgba(0,0,0,0.45)",
+  color: "white",
+  outline: "none",
+};
+
+const btnStyle: React.CSSProperties = {
+  padding: "0.6rem 0.8rem",
+  borderRadius: 12,
+  border: "1px solid #333",
+  background: "rgba(212,175,55,0.12)",
+  color: "white",
+  cursor: "pointer",
+};
+
+const linkBtnStyle: React.CSSProperties = {
+  background: "transparent",
+  border: "none",
+  color: "#d4af37",
+  cursor: "pointer",
+  padding: 0,
+};
+
+const h2: React.CSSProperties = { fontSize: "1.2rem", marginBottom: "0.75rem" };
+const h3: React.CSSProperties = { fontSize: "1.05rem", marginBottom: "0.25rem" };

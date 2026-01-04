@@ -1,0 +1,58 @@
+[
+  {
+    "id": "9ef71e7c-670b-46a6-96d3-0f6fa55c5e02",
+    "sourceBook": "Player's Handbook",
+    "background": "Acolyte",
+    "type": "Personality Trait",
+    "text": "I idolize a particular hero of my faith, and constantly refer to that person’s deeds."
+  },
+  {
+    "id": "66d823d3-c0a7-4db0-9780-7d7a4440daa7",
+    "sourceBook": "Player's Handbook",
+    "background": "Acolyte",
+    "type": "Ideal",
+    "text": "Tradition. The ancient traditions of worship and sacrifice must be preserved."
+  },
+  {
+    "id": "53df0e47-8bbc-4770-a05c-362f6f779331",
+    "sourceBook": "Player's Handbook",
+    "background": "Acolyte",
+    "type": "Bond",
+    "text": "I would die to recover an ancient relic of my faith that was lost long ago."
+  },
+  {
+    "id": "57198d0f-ae64-43f3-9d6d-50f7deddd23f",
+    "sourceBook": "Player's Handbook",
+    "background": "Acolyte",
+    "type": "Flaw",
+    "text": "I judge others harshly, and myself even more severely."
+  },
+  {
+    "id": "62d15c54-5923-4336-ab2e-2112f3a77336",
+    "sourceBook": "Player's Handbook",
+    "background": "Criminal",
+    "type": "Personality Trait",
+    "text": "I always have a plan for what to do when things go wrong."
+  },
+  {
+    "id": "9e262027-10ab-45ab-80c6-c91a89323153",
+    "sourceBook": "Player's Handbook",
+    "background": "Criminal",
+    "type": "Ideal",
+    "text": "Freedom. Chains are meant to be broken."
+  },
+  {
+    "id": "e229c65b-ea33-4141-a17b-a49bac44d79c",
+    "sourceBook": "Player's Handbook",
+    "background": "Criminal",
+    "type": "Bond",
+    "text": "Someone I loved died because of a mistake I made."
+  },
+  {
+    "id": "38e7b1e7-2642-4966-9850-1208c0194047",
+    "sourceBook": "Player's Handbook",
+    "background": "Criminal",
+    "type": "Flaw",
+    "text": "When I see something valuable, I can’t think about anything but how to steal it."
+  }
+]
