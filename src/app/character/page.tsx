@@ -793,16 +793,20 @@ export default function CharacterPage() {
                 <select
                   value={sheet.background}
                   onChange={(e) => {
-                    const b = e.target.value;
-                    setSheet({
-                      ...sheet,
-                      background: b,
-                      personalityTrait: "",
-                      ideal: "",
-                      bond: "",
-                      flaw: "",
-                    });
-                  }}
+  const b = e.target.value;
+  setSheet((prev) =>
+    prev
+      ? {
+          ...prev,
+          background: b,
+          personalityTrait: "",
+          ideal: "",
+          bond: "",
+          flaw: "",
+        }
+      : prev
+  );
+}}
                   style={inputStyle}
                 >
                   <option value="">Select…</option>
