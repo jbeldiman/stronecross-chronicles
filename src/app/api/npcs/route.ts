@@ -67,8 +67,11 @@ function ensureTownId(v: any): v is TownId {
 }
 
 function newId() {
-  if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
 }
 
 function normalizeNPC(input: any, existing?: NPC): NPC | null {
