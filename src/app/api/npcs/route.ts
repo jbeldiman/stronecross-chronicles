@@ -1,21 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-
-let kvGet: ((key: string) => Promise<any>) | null = null;
-let kvSet: ((key: string, value: any) => Promise<any>) | null = null;
-
-async function initKV() {
-  if (kvGet && kvSet) return;
-
-  try {
-   
-    const mod = require("@vercel/kv");
-    if (mod?.kv?.get && mod?.kv?.set) {
-      kvGet = mod.kv.get.bind(mod.kv);
-      kvSet = mod.kv.set.bind(mod.kv);
-    }
-  } catch {
-  }
-}
+import { kv } from "@vercel/kv";
 
 type TownId =
   | "stonecross"
@@ -44,9 +28,8 @@ type NPCState = {
 
 const KEY_PREFIX = "stonecross.npcs.v1";
 
-const mem = new Map<string, NPCState>();
-
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 function ok<T>(data: T, status = 200) {
   return NextResponse.json({ data }, { status });
@@ -83,6 +66,11 @@ function ensureTownId(v: any): v is TownId {
   );
 }
 
+function newId() {
+  if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function normalizeNPC(input: any, existing?: NPC): NPC | null {
   const name = String(input?.name ?? "").trim();
   const title = String(input?.title ?? "").trim();
@@ -92,11 +80,10 @@ function normalizeNPC(input: any, existing?: NPC): NPC | null {
 
   const createdAt = existing?.createdAt ?? nowIso();
   const updatedAt = nowIso();
-
   const id =
     typeof input?.id === "string" && input.id.trim()
       ? input.id.trim()
-      : existing?.id ?? (globalThis.crypto?.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
+      : existing?.id ?? newId();
 
   const commentsRaw = input?.comments;
   const comments = commentsRaw == null ? existing?.comments : String(commentsRaw).trim();
@@ -113,41 +100,19 @@ function normalizeNPC(input: any, existing?: NPC): NPC | null {
 }
 
 async function readState(room: string): Promise<NPCState> {
-  await initKV();
-
   const k = keyFor(room);
 
-
-  if (kvGet && kvSet) {
-    const stored = (await kvGet(k)) as NPCState | null;
-    if (stored && Array.isArray(stored.npcs)) return stored;
-
-
-    const seed: NPCState = { npcs: [], lastUpdatedAt: nowIso() };
-    await kvSet(k, seed);
-    return seed;
-  }
-
-
-  const stored = mem.get(k);
-  if (stored) return stored;
+  const stored = (await kv.get<NPCState>(k)) ?? null;
+  if (stored && Array.isArray(stored.npcs)) return stored;
 
   const seed: NPCState = { npcs: [], lastUpdatedAt: nowIso() };
-  mem.set(k, seed);
+  await kv.set(k, seed);
   return seed;
 }
 
 async function writeState(room: string, state: NPCState): Promise<void> {
-  await initKV();
-
   const k = keyFor(room);
-
-  if (kvSet) {
-    await kvSet(k, state);
-    return;
-  }
-
-  mem.set(k, state);
+  await kv.set(k, state);
 }
 
 export async function GET(req: NextRequest) {
@@ -169,7 +134,6 @@ export async function PUT(req: NextRequest) {
 
   const state = await readState(room);
 
-
   if (Array.isArray(body?.npcs)) {
     const next: NPC[] = [];
     for (const raw of body.npcs) {
@@ -184,7 +148,6 @@ export async function PUT(req: NextRequest) {
   }
 
   const op = String(body?.op ?? "").toLowerCase();
-
 
   if (op === "upsert") {
     const rawNpc = body?.npc;
