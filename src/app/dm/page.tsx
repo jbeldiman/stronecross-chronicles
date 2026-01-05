@@ -40,6 +40,10 @@ export default function DmPage() {
       router.replace("/login?next=/dm");
       return;
     }
+    if (s.username !== DM_USERNAME) {
+      router.replace("/");
+      return;
+    }
     setSession(s);
   }, [router]);
 
@@ -47,7 +51,7 @@ export default function DmPage() {
     const res = await fetch("/api/users", { headers: { "x-sc-user": actor } });
     if (!res.ok) throw new Error("Failed to load users");
     const data = (await res.json()) as { users: string[] };
-    setUsers(data.users || []);
+    setUsers((data.users || []).filter((u) => u && u !== DM_USERNAME));
   }
 
   async function loadCharacter(actor: string, username: string) {
@@ -61,10 +65,6 @@ export default function DmPage() {
 
   useEffect(() => {
     if (!session) return;
-    if (!isDm) {
-      router.replace("/");
-      return;
-    }
 
     (async () => {
       try {
@@ -74,7 +74,7 @@ export default function DmPage() {
         setError(e?.message || "Failed to load");
       }
     })();
-  }, [session, isDm, router]);
+  }, [session]);
 
   const selectedLabel = useMemo(() => {
     if (!selectedUser) return "Select a player";
@@ -92,6 +92,10 @@ export default function DmPage() {
         </div>
       </main>
     );
+  }
+
+  if (!isDm) {
+    return null;
   }
 
   return (

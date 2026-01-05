@@ -1,10 +1,10 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 const AUTH_SESSION_KEY = "stonecross.session.v1";
+const DM_USERNAME = "jbeldiman";
 
 type Session = {
   username: string;
@@ -31,12 +31,12 @@ export default function HomePage() {
     setSession(loadSession());
   }, []);
 
+  const isDm = session?.username === DM_USERNAME;
+
   function logout() {
-    try {
-      localStorage.removeItem(AUTH_SESSION_KEY);
-    } catch {}
+    localStorage.removeItem(AUTH_SESSION_KEY);
     setSession(null);
-    router.push("/");
+    router.push("/login");
   }
 
   return (
@@ -45,71 +45,46 @@ export default function HomePage() {
       <div className="sc-overlay" />
 
       <div className="sc-content" style={{ padding: "2rem" }}>
-        <header
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: "1rem",
-            marginBottom: "1rem",
-          }}
-        >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: "1rem" }}>
           <div>
-            <h1 style={{ margin: 0 }}>Stonecross Chronicles</h1>
-            <p style={{ margin: "0.35rem 0 0", opacity: 0.85 }}>
-              Welcome. Choose where to go:
+            <h1 style={{ marginBottom: "0.25rem" }}>Stonecross Chronicles</h1>
+            <p style={{ opacity: 0.85, margin: 0 }}>
+              {session ? (
+                <>
+                  Logged in as <strong>{session.username}</strong>
+                </>
+              ) : (
+                <>Not logged in</>
+              )}
             </p>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-            {session ? (
-              <>
-                <span style={{ opacity: 0.85, fontSize: "0.95rem" }}>
-                  Logged in as <strong>{session.username}</strong>
-                </span>
+          {session ? (
+            <button
+              onClick={logout}
+              style={{
+                border: "1px solid #333",
+                background: "rgba(0,0,0,0.25)",
+                color: "white",
+                borderRadius: 12,
+                padding: "0.55rem 0.75rem",
+                cursor: "pointer",
+              }}
+              title="Log out"
+            >
+              Log out
+            </button>
+          ) : null}
+        </div>
 
-                <button
-                  onClick={logout}
-                  title="Log out"
-                  aria-label="Log out"
-                  style={{
-                    width: 40,
-                    height: 40,
-                    borderRadius: 12,
-                    border: "1px solid #333",
-                    background: "rgba(255,255,255,0.06)",
-                    color: "white",
-                    cursor: "pointer",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  ⎋
-                </button>
-              </>
-            ) : (
-              <span style={{ opacity: 0.75, fontSize: "0.95rem" }}>Not logged in</span>
-            )}
-          </div>
-        </header>
+        <p style={{ marginTop: "1.25rem" }}>Welcome. Choose where to go:</p>
 
-        <ul style={{ marginTop: "0.75rem" }}>
-          <li>
-            <Link href="/login">Login</Link>
-          </li>
-          <li>
-            <Link href="/character">Character</Link>
-          </li>
-          <li>
-            <Link href="/map">Map</Link>
-          </li>
-          <li>
-            <Link href="/combat">Combat</Link>
-          </li>
-          <li>
-            <Link href="/dm">DM</Link>
-          </li>
+        <ul>
+          <li><a href="/login">Login</a></li>
+          <li><a href="/character">Character</a></li>
+          <li><a href="/map">Map</a></li>
+          <li><a href="/combat">Combat</a></li>
+          {isDm ? <li><a href="/dm">DM</a></li> : null}
         </ul>
       </div>
     </main>
