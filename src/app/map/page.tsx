@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { TransformComponent, TransformWrapper } from "react-zoom-pan-pinch";
 
 const AUTH_SESSION_KEY = "stonecross.session.v1";
 const DM_USERNAME = "jbeldiman";
@@ -17,7 +18,7 @@ type TownId =
   | "greenshadow";
 
 type TownView = {
-  id: string; 
+  id: string;
   label: string;
   src: string;
 };
@@ -27,8 +28,8 @@ type Town = {
   name: string;
   x: number;
   y: number;
-  mapSrc?: string; 
-  views?: TownView[]; 
+  mapSrc?: string;
+  views?: TownView[];
   summary?: string;
   npcs?: { name: string; location: string; note?: string }[];
 };
@@ -111,6 +112,33 @@ async function fetchNPCs(room: string): Promise<NPCState | null> {
   return json.data ?? null;
 }
 
+function ZoomControls({
+  onZoomIn,
+  onZoomOut,
+  onReset,
+}: {
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onReset: () => void;
+}) {
+  return (
+    <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", padding: "0.5rem" }}>
+      <button onClick={onZoomIn} style={miniBtn} title="Zoom in">
+        +
+      </button>
+      <button onClick={onZoomOut} style={miniBtn} title="Zoom out">
+        −
+      </button>
+      <button onClick={onReset} style={miniBtn} title="Reset">
+        Reset
+      </button>
+      <span style={{ opacity: 0.7, fontSize: "0.85rem", marginLeft: "0.25rem" }}>
+        Scroll to zoom • Drag to pan • Double-click to zoom
+      </span>
+    </div>
+  );
+}
+
 export default function MapPage() {
   const router = useRouter();
 
@@ -122,10 +150,14 @@ export default function MapPage() {
   const [selected, setSelected] = useState<Town | null>(null);
 
   const [playerPreview, setPlayerPreview] = useState(false);
+
   const lastUnlockStamp = useRef<string>("");
   const [npcState, setNpcState] = useState<NPCState>({ npcs: [], lastUpdatedAt: "" });
   const lastNpcStamp = useRef<string>("");
   const [activeViewId, setActiveViewId] = useState<string>("");
+
+  // If you switch tabs/images, we bump this so TransformWrapper remounts (reset zoom)
+  const [viewerKey, setViewerKey] = useState(0);
 
   const towns: Town[] = useMemo(
     () => [
@@ -134,7 +166,10 @@ export default function MapPage() {
         name: "Stonecross",
         x: 50,
         y: 10,
-        mapSrc: "/maps/towns/stonecross.jpg",
+        views: [
+          { id: "vista", label: "Vista", src: "/maps/cities/stonecross/stonecross-vista.png" },
+          { id: "topdown", label: "Top Down", src: "/maps/cities/stonecross/stonecross-topdown.png" },
+        ],
         summary: "Mountain-ward stronghold and the heart of the realm.",
         npcs: [
           { name: "Captain of the Watch", location: "Gatehouse", note: "Keeps order." },
@@ -229,6 +264,7 @@ export default function MapPage() {
 
   const unlockedSet = useMemo(() => new Set(unlocked), [unlocked]);
 
+  // Unlock sync (DM seeds if missing)
   useEffect(() => {
     if (!isClient || !session) return;
 
@@ -246,6 +282,7 @@ export default function MapPage() {
     })();
   }, [isClient, session, room, isDm]);
 
+  // Player polling for unlocks
   useEffect(() => {
     if (!isClient || !session) return;
     if (isDm) return;
@@ -279,6 +316,7 @@ export default function MapPage() {
     });
   }
 
+  // NPC initial load
   useEffect(() => {
     if (!isClient || !session) return;
 
@@ -290,6 +328,7 @@ export default function MapPage() {
     })();
   }, [isClient, session, room]);
 
+  // NPC polling for players
   useEffect(() => {
     if (!isClient || !session) return;
     if (isDm) return;
@@ -307,13 +346,16 @@ export default function MapPage() {
     return () => window.clearInterval(t);
   }, [isClient, session, room, isDm]);
 
+  // When selecting a town, default to first view if it has views
   useEffect(() => {
     if (!selected) return;
 
     if (selected.views && selected.views.length) {
       setActiveViewId(selected.views[0].id);
+      setViewerKey((k) => k + 1);
     } else {
       setActiveViewId("");
+      setViewerKey((k) => k + 1);
     }
   }, [selected]);
 
@@ -328,7 +370,7 @@ export default function MapPage() {
     const local = (selected.npcs || []).map((n) => ({
       key: `local:${selected.id}:${n.name}:${n.location}`,
       name: n.name,
-      title: n.location, 
+      title: n.location,
       comments: n.note,
       source: "local" as const,
     }));
@@ -407,7 +449,9 @@ export default function MapPage() {
         {playerPreview ? (
           <div style={{ ...cardStyle, marginTop: "1rem", borderStyle: "dashed" }}>
             <strong>Player View Enabled</strong>
-            <div style={{ opacity: 0.85, marginTop: "0.25rem" }}>DM powers are temporarily disabled so you can preview what players see.</div>
+            <div style={{ opacity: 0.85, marginTop: "0.25rem" }}>
+              DM powers are temporarily disabled so you can preview what players see.
+            </div>
           </div>
         ) : null}
 
@@ -544,7 +588,6 @@ export default function MapPage() {
 
               <div style={{ display: "grid", gridTemplateColumns: "1.2fr 0.8fr", gap: 0 }}>
                 <div style={{ borderRight: "1px solid rgba(255,255,255,0.08)" }}>
-                  {/* Multi-view tabs if available */}
                   {selected.views && selected.views.length ? (
                     <div style={{ padding: "0.75rem 0.75rem 0", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
                       <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
@@ -553,7 +596,10 @@ export default function MapPage() {
                           return (
                             <button
                               key={`${selected.id}-view-${v.id}`}
-                              onClick={() => setActiveViewId(v.id)}
+                              onClick={() => {
+                                setActiveViewId(v.id);
+                                setViewerKey((k) => k + 1); // reset zoom when switching images
+                              }}
                               style={{
                                 padding: "0.45rem 0.65rem",
                                 borderRadius: 12,
@@ -573,15 +619,48 @@ export default function MapPage() {
                   ) : null}
 
                   {activeImageSrc ? (
-                    <img
-                      src={activeImageSrc}
-                      alt={`${selected.name} map`}
-                      style={{ width: "100%", display: "block", maxHeight: "70vh", objectFit: "contain", background: "#0b0b0b" }}
-                      draggable={false}
-                      onError={(e) => {
-                        (e.currentTarget as HTMLImageElement).style.display = "none";
-                      }}
-                    />
+                    <div style={{ background: "#0b0b0b" }}>
+                      <TransformWrapper
+                        key={viewerKey}
+                        initialScale={1}
+                        minScale={1}
+                        maxScale={6}
+                        wheel={{ step: 0.12 }}
+                        doubleClick={{ mode: "zoomIn" }}
+                        panning={{ velocityDisabled: true }}
+                      >
+                        {({ zoomIn, zoomOut, resetTransform }) => (
+                          <>
+                            <ZoomControls onZoomIn={zoomIn} onZoomOut={zoomOut} onReset={resetTransform} />
+                            <TransformComponent
+                              wrapperStyle={{
+                                width: "100%",
+                                maxHeight: "70vh",
+                                overflow: "hidden",
+                              }}
+                              contentStyle={{ width: "100%" }}
+                            >
+                              <img
+                                src={activeImageSrc}
+                                alt={`${selected.name} map`}
+                                style={{
+                                  width: "100%",
+                                  display: "block",
+                                  maxHeight: "70vh",
+                                  objectFit: "contain",
+                                  cursor: "grab",
+                                  userSelect: "none",
+                                }}
+                                draggable={false}
+                                onError={(e) => {
+                                  (e.currentTarget as HTMLImageElement).style.display = "none";
+                                }}
+                              />
+                            </TransformComponent>
+                          </>
+                        )}
+                      </TransformWrapper>
+                    </div>
                   ) : (
                     <div style={{ padding: "1rem", opacity: 0.8 }}>No town map image set yet.</div>
                   )}
@@ -594,8 +673,7 @@ export default function MapPage() {
                     <ul style={{ paddingLeft: "1rem", marginTop: "0.5rem" }}>
                       {mergedNpcsForSelected.map((n) => (
                         <li key={n.key} style={{ margin: "0.45rem 0" }}>
-                          <strong>{n.name}</strong>{" "}
-                          <span style={{ opacity: 0.85 }}>— {n.title}</span>
+                          <strong>{n.name}</strong> <span style={{ opacity: 0.85 }}>— {n.title}</span>
                           {n.comments ? (
                             <div style={{ opacity: 0.75, fontSize: "0.92rem", marginTop: "0.15rem" }}>{n.comments}</div>
                           ) : null}
@@ -607,7 +685,7 @@ export default function MapPage() {
                   )}
 
                   <div style={{ marginTop: "0.85rem", opacity: 0.6, fontSize: "0.85rem" }}>
-              
+                    NPCs are synced per room. Add/edit them on the DM page.
                   </div>
                 </div>
               </div>
@@ -632,6 +710,15 @@ const btnStyle: React.CSSProperties = {
   borderRadius: 12,
   border: "1px solid #333",
   background: "rgba(212,175,55,0.12)",
+  color: "white",
+  cursor: "pointer",
+};
+
+const miniBtn: React.CSSProperties = {
+  padding: "0.35rem 0.6rem",
+  borderRadius: 10,
+  border: "1px solid rgba(255,255,255,0.12)",
+  background: "rgba(0,0,0,0.25)",
   color: "white",
   cursor: "pointer",
 };
