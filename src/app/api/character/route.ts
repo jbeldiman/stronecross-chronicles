@@ -1,32 +1,40 @@
-import { kv } from "@vercel/kv";
 import { NextResponse } from "next/server";
+import { kv } from "@vercel/kv";
 
-const CHAR_KEY_PREFIX = "stonecross:character:";
+const DM_USERNAME = "jbeldiman";
 
-function normalizeUsername(v: string) {
-  return v.trim().toLowerCase();
+type CharacterSheet = unknown;
+
+function keyForUser(username: string) {
+  return `sc:char:${username}`;
 }
 
 export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const username = normalizeUsername(String(searchParams.get("u") || ""));
-  if (!username) return NextResponse.json({ error: "missing_u" }, { status: 400 });
+  const url = new URL(req.url);
+  const username = (url.searchParams.get("username") || "").trim().toLowerCase();
 
-  const key = `${CHAR_KEY_PREFIX}${username}`;
-  const data = await kv.get(key);
+  if (!username) {
+    return NextResponse.json({ error: "Missing username" }, { status: 400 });
+  }
 
-  return NextResponse.json({ ok: true, username, data: data ?? null });
+  const sheet = await kv.get<CharacterSheet>(keyForUser(username));
+  return NextResponse.json({ username, sheet: sheet ?? null });
 }
 
 export async function PUT(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const username = normalizeUsername(String(searchParams.get("u") || ""));
-  if (!username) return NextResponse.json({ error: "missing_u" }, { status: 400 });
+  const actor = (req.headers.get("x-sc-user") || "").trim().toLowerCase();
+  if (!actor) return NextResponse.json({ error: "Missing actor" }, { status: 401 });
 
-  const body = await req.json();
-  const key = `${CHAR_KEY_PREFIX}${username}`;
+  const body = (await req.json()) as { username?: string; sheet?: CharacterSheet };
+  const username = (body.username || "").trim().toLowerCase();
 
-  await kv.set(key, { ...body, lastUpdatedAt: new Date().toISOString() });
+  if (!username) return NextResponse.json({ error: "Missing username" }, { status: 400 });
+  if (actor !== username && actor !== DM_USERNAME) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
-  return NextResponse.json({ ok: true, username });
+  await kv.set(keyForUser(username), body.sheet ?? null);
+  await kv.sadd("sc:users", username);
+
+  return NextResponse.json({ ok: true });
 }
