@@ -1,8 +1,11 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import spellsData from "../../data/spells.json";
 import traitsData from "../../data/traits.json";
+
+const AUTH_SESSION_KEY = "stonecross.session.v1";
 
 type Ability = "STR" | "DEX" | "CON" | "INT" | "WIS" | "CHA";
 
@@ -123,7 +126,10 @@ type CharacterSheet = {
   spellSlotsUsed: Record<number, number>;
 };
 
-const STORAGE_KEY = "stonecross.character.v1";
+type Session = {
+  username: string;
+  loggedInAt?: string;
+};
 
 const XP_FOR_LEVEL: Record<number, number> = {
   1: 0,
@@ -221,7 +227,6 @@ function defaultSheet(): CharacterSheet {
 
 function normalizeSheet(raw: unknown): CharacterSheet {
   const base = defaultSheet();
-
   const r = isRecord(raw) ? raw : {};
 
   const merged: CharacterSheet = {
@@ -256,10 +261,14 @@ function normalizeSheet(raw: unknown): CharacterSheet {
     tempHp: Number.isFinite(Number(r.tempHp)) ? clamp(Number(r.tempHp), 0, 999) : base.tempHp,
 
     baseAc: Number.isFinite(Number(r.baseAc)) ? clamp(Number(r.baseAc), 0, 50) : base.baseAc,
-    initiativeBonus: Number.isFinite(Number(r.initiativeBonus)) ? clamp(Number(r.initiativeBonus), -20, 20) : base.initiativeBonus,
+    initiativeBonus: Number.isFinite(Number(r.initiativeBonus))
+      ? clamp(Number(r.initiativeBonus), -20, 20)
+      : base.initiativeBonus,
     speed: Number.isFinite(Number(r.speed)) ? clamp(Number(r.speed), 0, 200) : base.speed,
 
-    inventory: Array.isArray(r.inventory) ? r.inventory.filter((x): x is string => typeof x === "string") : base.inventory,
+    inventory: Array.isArray(r.inventory)
+      ? r.inventory.filter((x): x is string => typeof x === "string")
+      : base.inventory,
 
     weapons: Array.isArray(r.weapons)
       ? r.weapons
@@ -274,15 +283,21 @@ function normalizeSheet(raw: unknown): CharacterSheet {
 
     armor: isRecord(r.armor)
       ? {
-          name: typeof r.armor.name === "string" ? r.armor.name : "Armor",
-          acBonus: Number.isFinite(Number(r.armor.acBonus)) ? Number(r.armor.acBonus) : 0,
+          name: typeof (r.armor as Record<string, unknown>).name === "string"
+            ? String((r.armor as Record<string, unknown>).name)
+            : "Armor",
+          acBonus: Number.isFinite(Number((r.armor as Record<string, unknown>).acBonus))
+            ? Number((r.armor as Record<string, unknown>).acBonus)
+            : 0,
           dexCap:
-            r.armor.dexCap === null
+            (r.armor as Record<string, unknown>).dexCap === null
               ? null
-              : Number.isFinite(Number(r.armor.dexCap))
-                ? Number(r.armor.dexCap)
+              : Number.isFinite(Number((r.armor as Record<string, unknown>).dexCap))
+                ? Number((r.armor as Record<string, unknown>).dexCap)
                 : null,
-          notes: typeof r.armor.notes === "string" ? r.armor.notes : "",
+          notes: typeof (r.armor as Record<string, unknown>).notes === "string"
+            ? String((r.armor as Record<string, unknown>).notes)
+            : "",
         }
       : r.armor === null
         ? null
@@ -296,7 +311,9 @@ function normalizeSheet(raw: unknown): CharacterSheet {
 
     traits: Array.isArray(r.traits) ? r.traits.filter((x): x is string => typeof x === "string") : base.traits,
 
-    cantripIds: Array.isArray(r.cantripIds) ? r.cantripIds.filter((x): x is string => typeof x === "string") : base.cantripIds,
+    cantripIds: Array.isArray(r.cantripIds)
+      ? r.cantripIds.filter((x): x is string => typeof x === "string")
+      : base.cantripIds,
 
     spellIdsByLevel: {
       ...base.spellIdsByLevel,
@@ -314,35 +331,81 @@ function normalizeSheet(raw: unknown): CharacterSheet {
     } as CharacterSheet["spellSlotsUsed"],
   };
 
-  // Ensure required strings never end up undefined from spread
   merged.name = merged.name || base.name;
   merged.className = merged.className || base.className;
 
   return merged;
 }
 
-function loadSheet(): CharacterSheet {
+function loadSession(): Session | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return defaultSheet();
-    const parsed: unknown = JSON.parse(raw);
-    return normalizeSheet(parsed);
+    const raw = localStorage.getItem(AUTH_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.username) return null;
+    return parsed as Session;
   } catch {
-    return defaultSheet();
+    return null;
   }
 }
 
-function saveSheet(sheet: CharacterSheet) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(sheet));
+async function fetchCharacter(username: string): Promise<CharacterSheet | null> {
+  const res = await fetch(`/api/character?u=${encodeURIComponent(username)}`, { cache: "no-store" });
+  if (!res.ok) return null;
+  const json = (await res.json()) as { ok?: boolean; data?: unknown };
+  return json?.data ? normalizeSheet(json.data) : null;
+}
+
+async function saveCharacter(username: string, sheet: CharacterSheet): Promise<boolean> {
+  const res = await fetch(`/api/character?u=${encodeURIComponent(username)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(sheet),
+  });
+  return res.ok;
 }
 
 export default function CharacterPage() {
-  const [sheet, setSheet] = useState<CharacterSheet>(() => loadSheet());
+  const router = useRouter();
+
+  const [session, setSession] = useState<Session | null>(null);
+  const [sheet, setSheet] = useState<CharacterSheet>(() => defaultSheet());
   const [selectedSpellId, setSelectedSpellId] = useState<string>("");
 
   useEffect(() => {
-    saveSheet(sheet);
-  }, [sheet]);
+    const s = loadSession();
+    if (!s) {
+      router.replace("/login?next=/character");
+      return;
+    }
+    setSession(s);
+  }, [router]);
+
+  useEffect(() => {
+    if (!session?.username) return;
+
+    let cancelled = false;
+
+    (async () => {
+      const loaded = await fetchCharacter(session.username);
+      if (cancelled) return;
+      setSheet(loaded ?? defaultSheet());
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.username]);
+
+  useEffect(() => {
+    if (!session?.username) return;
+
+    const t = window.setTimeout(() => {
+      void saveCharacter(session.username, sheet);
+    }, 450);
+
+    return () => window.clearTimeout(t);
+  }, [sheet, session?.username]);
 
   const spellsById = useMemo(() => {
     const m = new Map<string, Spell>();
@@ -358,10 +421,9 @@ export default function CharacterPage() {
   const xpToNext = nextXp === null ? 0 : Math.max(0, nextXp - sheet.experience);
 
   const dexMod = abilityMod(sheet.abilities.DEX);
-  const armorAc =
-    sheet.armor
-      ? sheet.baseAc + sheet.armor.acBonus + Math.min(dexMod, sheet.armor.dexCap ?? dexMod)
-      : sheet.baseAc + dexMod;
+  const armorAc = sheet.armor
+    ? sheet.baseAc + sheet.armor.acBonus + Math.min(dexMod, sheet.armor.dexCap ?? dexMod)
+    : sheet.baseAc + dexMod;
 
   const selectedSpell = selectedSpellId ? spellsById.get(selectedSpellId) : undefined;
 
@@ -381,12 +443,39 @@ export default function CharacterPage() {
 
   const BACKGROUNDS = Array.from(new Set(TRAITS.map((t) => t.background))).sort();
 
+  if (!session) {
+    return (
+      <main className="sc-page">
+        <div className="sc-bg" style={{ backgroundImage: "url('/backgrounds/character.jpg')" }} />
+        <div className="sc-overlay" />
+        <div className="sc-content" style={{ padding: "2rem" }}>
+          <h1 style={{ marginBottom: "0.5rem" }}>Character Sheet</h1>
+          <section style={cardStyle}>
+            <p style={{ opacity: 0.85 }}>Loading…</p>
+          </section>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="sc-page">
       <div className="sc-bg" style={{ backgroundImage: "url('/backgrounds/character.jpg')" }} />
       <div className="sc-overlay" />
       <div className="sc-content" style={{ padding: "2rem" }}>
-        <h1 style={{ marginBottom: "0.5rem" }}>Character Sheet</h1>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "flex-end" }}>
+          <div>
+            <h1 style={{ marginBottom: "0.5rem" }}>Character Sheet</h1>
+            <div style={{ opacity: 0.75, fontSize: "0.95rem" }}>
+              Logged in as <strong>{session.username}</strong>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+            <button onClick={() => router.push("/logout")} style={{ ...btnStyle, background: "rgba(255,255,255,0.06)" }}>
+              Log out
+            </button>
+          </div>
+        </div>
 
         <section style={cardStyle}>
           <div
@@ -397,19 +486,11 @@ export default function CharacterPage() {
             }}
           >
             <Field label="Name">
-              <input
-                value={sheet.name}
-                onChange={(e) => update("name", e.target.value)}
-                style={inputStyle}
-              />
+              <input value={sheet.name} onChange={(e) => update("name", e.target.value)} style={inputStyle} />
             </Field>
 
             <Field label="Class">
-              <input
-                value={sheet.className}
-                onChange={(e) => update("className", e.target.value)}
-                style={inputStyle}
-              />
+              <input value={sheet.className} onChange={(e) => update("className", e.target.value)} style={inputStyle} />
             </Field>
 
             <Field label="Level">
@@ -425,19 +506,13 @@ export default function CharacterPage() {
               <input
                 type="number"
                 value={sheet.experience}
-                onChange={(e) =>
-                  update("experience", clamp(Number(e.target.value), 0, XP_FOR_LEVEL[20]))
-                }
+                onChange={(e) => update("experience", clamp(Number(e.target.value), 0, XP_FOR_LEVEL[20]))}
                 style={inputStyle}
               />
             </Field>
 
             <Field label="XP to Next Level">
-              <input
-                value={nextXp === null ? "—" : String(xpToNext)}
-                readOnly
-                style={{ ...inputStyle, opacity: 0.9 }}
-              />
+              <input value={nextXp === null ? "—" : String(xpToNext)} readOnly style={{ ...inputStyle, opacity: 0.9 }} />
             </Field>
           </div>
 
@@ -457,14 +532,7 @@ export default function CharacterPage() {
           </div>
         </section>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "360px 1fr",
-            gap: "1rem",
-            marginTop: "1rem",
-          }}
-        >
+        <div style={{ display: "grid", gridTemplateColumns: "360px 1fr", gap: "1rem", marginTop: "1rem" }}>
           <section style={cardStyle}>
             <h2 style={h2}>Abilities</h2>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
@@ -482,22 +550,12 @@ export default function CharacterPage() {
                       type="number"
                       value={score}
                       onChange={(e) =>
-                        update("abilities", {
-                          ...sheet.abilities,
-                          [ab]: clamp(Number(e.target.value), 1, 30),
-                        })
+                        update("abilities", { ...sheet.abilities, [ab]: clamp(Number(e.target.value), 1, 30) })
                       }
                       style={inputStyle}
                     />
 
-                    <label
-                      style={{
-                        display: "flex",
-                        gap: "0.5rem",
-                        alignItems: "center",
-                        marginTop: "0.35rem",
-                      }}
-                    >
+                    <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.35rem" }}>
                       <input
                         type="checkbox"
                         checked={!!sheet.savingThrowProficiencies[ab]}
@@ -508,9 +566,7 @@ export default function CharacterPage() {
                           })
                         }
                       />
-                      <span style={{ fontSize: "0.9rem", opacity: 0.9 }}>
-                        Saving throw prof.
-                      </span>
+                      <span style={{ fontSize: "0.9rem", opacity: 0.9 }}>Saving throw prof.</span>
                     </label>
                   </div>
                 );
@@ -603,19 +659,13 @@ export default function CharacterPage() {
               {sheet.inventory.map((it, idx) => (
                 <li key={`${it}-${idx}`} style={{ margin: "0.25rem 0" }}>
                   {it}{" "}
-                  <button
-                    onClick={() => update("inventory", sheet.inventory.filter((_, i) => i !== idx))}
-                    style={linkBtnStyle}
-                  >
+                  <button onClick={() => update("inventory", sheet.inventory.filter((_, i) => i !== idx))} style={linkBtnStyle}>
                     remove
                   </button>
                 </li>
               ))}
             </ul>
-            <AddRow
-              placeholder="Add an item (e.g., Healing Potion)"
-              onAdd={(v) => update("inventory", [...sheet.inventory, v])}
-            />
+            <AddRow placeholder="Add an item (e.g., Healing Potion)" onAdd={(v) => update("inventory", [...sheet.inventory, v])} />
           </section>
         </div>
 
@@ -676,10 +726,7 @@ export default function CharacterPage() {
                   </Field>
                 </div>
 
-                <button
-                  onClick={() => update("weapons", sheet.weapons.filter((_, i) => i !== idx))}
-                  style={{ ...linkBtnStyle, marginTop: "0.5rem" }}
-                >
+                <button onClick={() => update("weapons", sheet.weapons.filter((_, i) => i !== idx))} style={{ ...linkBtnStyle, marginTop: "0.5rem" }}>
                   remove weapon
                 </button>
               </div>
@@ -687,10 +734,7 @@ export default function CharacterPage() {
 
             <button
               onClick={() =>
-                update("weapons", [
-                  ...sheet.weapons,
-                  { name: "New Weapon", toHitBonus: 0, damageBonus: 0, magicalEffects: "" },
-                ])
+                update("weapons", [...sheet.weapons, { name: "New Weapon", toHitBonus: 0, damageBonus: 0, magicalEffects: "" }])
               }
               style={btnStyle}
             >
@@ -698,116 +742,104 @@ export default function CharacterPage() {
             </button>
           </section>
 
-        <section style={cardStyle}>
-  <h2 style={h2}>Armor</h2>
+          <section style={cardStyle}>
+            <h2 style={h2}>Armor</h2>
 
-  {sheet.armor ? (
-    <>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 120px 120px",
-          gap: "0.75rem",
-        }}
-      >
-        <Field label="Armor Name">
-          <input
-            value={sheet.armor.name}
-            onChange={(e) => {
-              const current = sheet.armor;
-              if (!current) return;
+            {sheet.armor ? (
+              <>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 120px", gap: "0.75rem" }}>
+                  <Field label="Armor Name">
+                    <input
+                      value={sheet.armor.name}
+                      onChange={(e) => {
+                        const current = sheet.armor;
+                        if (!current) return;
 
-              update("armor", {
-                name: e.target.value,
-                acBonus: current.acBonus,
-                dexCap: current.dexCap,
-                notes: current.notes,
-              });
-            }}
-            style={inputStyle}
-          />
-        </Field>
+                        update("armor", {
+                          name: e.target.value,
+                          acBonus: current.acBonus,
+                          dexCap: current.dexCap,
+                          notes: current.notes,
+                        });
+                      }}
+                      style={inputStyle}
+                    />
+                  </Field>
 
-        <Field label="+ AC">
-          <input
-            type="number"
-            value={sheet.armor.acBonus}
-            onChange={(e) => {
-              const current = sheet.armor;
-              if (!current) return;
+                  <Field label="+ AC">
+                    <input
+                      type="number"
+                      value={sheet.armor.acBonus}
+                      onChange={(e) => {
+                        const current = sheet.armor;
+                        if (!current) return;
 
-              update("armor", {
-                name: current.name,
-                acBonus: Number(e.target.value),
-                dexCap: current.dexCap,
-                notes: current.notes,
-              });
-            }}
-            style={inputStyle}
-          />
-        </Field>
+                        update("armor", {
+                          name: current.name,
+                          acBonus: Number(e.target.value),
+                          dexCap: current.dexCap,
+                          notes: current.notes,
+                        });
+                      }}
+                      style={inputStyle}
+                    />
+                  </Field>
 
-        <Field label="Dex Cap">
-          <input
-            type="number"
-            value={sheet.armor.dexCap ?? ""}
-            placeholder="none"
-            onChange={(e) => {
-              const current = sheet.armor;
-              if (!current) return;
+                  <Field label="Dex Cap">
+                    <input
+                      type="number"
+                      value={sheet.armor.dexCap ?? ""}
+                      placeholder="none"
+                      onChange={(e) => {
+                        const current = sheet.armor;
+                        if (!current) return;
 
-              const v = e.target.value.trim();
-              update("armor", {
-                name: current.name,
-                acBonus: current.acBonus,
-                dexCap: v === "" ? null : Number(v),
-                notes: current.notes,
-              });
-            }}
-            style={inputStyle}
-          />
-        </Field>
-      </div>
+                        const v = e.target.value.trim();
+                        update("armor", {
+                          name: current.name,
+                          acBonus: current.acBonus,
+                          dexCap: v === "" ? null : Number(v),
+                          notes: current.notes,
+                        });
+                      }}
+                      style={inputStyle}
+                    />
+                  </Field>
+                </div>
 
-      <Field label="Notes" style={{ marginTop: "0.75rem" }}>
-        <input
-          value={sheet.armor.notes}
-          onChange={(e) => {
-            const current = sheet.armor;
-            if (!current) return;
+                <Field label="Notes" style={{ marginTop: "0.75rem" }}>
+                  <input
+                    value={sheet.armor.notes}
+                    onChange={(e) => {
+                      const current = sheet.armor;
+                      if (!current) return;
 
-            update("armor", {
-              name: current.name,
-              acBonus: current.acBonus,
-              dexCap: current.dexCap,
-              notes: e.target.value,
-            });
-          }}
-          style={inputStyle}
-        />
-      </Field>
+                      update("armor", {
+                        name: current.name,
+                        acBonus: current.acBonus,
+                        dexCap: current.dexCap,
+                        notes: e.target.value,
+                      });
+                    }}
+                    style={inputStyle}
+                  />
+                </Field>
 
-      <p style={{ marginTop: "0.75rem", opacity: 0.9 }}>
-        Calculated AC: <strong>{armorAc}</strong>
-      </p>
+                <p style={{ marginTop: "0.75rem", opacity: 0.9 }}>
+                  Calculated AC: <strong>{armorAc}</strong>
+                </p>
 
-      <button onClick={() => update("armor", null)} style={btnStyle}>
-        Remove Armor
-      </button>
-    </>
-  ) : (
-    <button
-      onClick={() =>
-        update("armor", { name: "Armor", acBonus: 0, dexCap: null, notes: "" })
-      }
-      style={btnStyle}
-    >
-      + Add Armor
-    </button>
-  )}
-</section>
-</div>
-  
+                <button onClick={() => update("armor", null)} style={btnStyle}>
+                  Remove Armor
+                </button>
+              </>
+            ) : (
+              <button onClick={() => update("armor", { name: "Armor", acBonus: 0, dexCap: null, notes: "" })} style={btnStyle}>
+                + Add Armor
+              </button>
+            )}
+          </section>
+        </div>
 
         <section style={{ ...cardStyle, marginTop: "1rem" }}>
           <h2 style={h2}>Spellcasting</h2>
@@ -908,13 +940,9 @@ export default function CharacterPage() {
               {sheet.background ? (
                 <div style={{ marginTop: "0.75rem" }}>
                   <div style={{ marginTop: "0.75rem" }}>
-                    <strong style={{ display: "block", marginBottom: "0.25rem" }}>
-                      Personality Trait
-                    </strong>
+                    <strong style={{ display: "block", marginBottom: "0.25rem" }}>Personality Trait</strong>
                     <TraitPicker
-                      entries={TRAITS.filter(
-                        (t) => t.background === sheet.background && t.type === "Personality Trait"
-                      )}
+                      entries={TRAITS.filter((t) => t.background === sheet.background && t.type === "Personality Trait")}
                       value={sheet.personalityTrait}
                       onPick={(v) => update("personalityTrait", v)}
                     />
@@ -923,9 +951,7 @@ export default function CharacterPage() {
                   <div style={{ marginTop: "0.75rem" }}>
                     <strong style={{ display: "block", marginBottom: "0.25rem" }}>Ideal</strong>
                     <TraitPicker
-                      entries={TRAITS.filter(
-                        (t) => t.background === sheet.background && t.type === "Ideal"
-                      )}
+                      entries={TRAITS.filter((t) => t.background === sheet.background && t.type === "Ideal")}
                       value={sheet.ideal}
                       onPick={(v) => update("ideal", v)}
                     />
@@ -934,9 +960,7 @@ export default function CharacterPage() {
                   <div style={{ marginTop: "0.75rem" }}>
                     <strong style={{ display: "block", marginBottom: "0.25rem" }}>Bond</strong>
                     <TraitPicker
-                      entries={TRAITS.filter(
-                        (t) => t.background === sheet.background && t.type === "Bond"
-                      )}
+                      entries={TRAITS.filter((t) => t.background === sheet.background && t.type === "Bond")}
                       value={sheet.bond}
                       onPick={(v) => update("bond", v)}
                     />
@@ -945,9 +969,7 @@ export default function CharacterPage() {
                   <div style={{ marginTop: "0.75rem" }}>
                     <strong style={{ display: "block", marginBottom: "0.25rem" }}>Flaw</strong>
                     <TraitPicker
-                      entries={TRAITS.filter(
-                        (t) => t.background === sheet.background && t.type === "Flaw"
-                      )}
+                      entries={TRAITS.filter((t) => t.background === sheet.background && t.type === "Flaw")}
                       value={sheet.flaw}
                       onPick={(v) => update("flaw", v)}
                     />
@@ -966,20 +988,14 @@ export default function CharacterPage() {
                 {sheet.traits.map((t, idx) => (
                   <li key={`${t}-${idx}`} style={{ margin: "0.25rem 0" }}>
                     {t}{" "}
-                    <button
-                      onClick={() => update("traits", sheet.traits.filter((_, i) => i !== idx))}
-                      style={linkBtnStyle}
-                    >
+                    <button onClick={() => update("traits", sheet.traits.filter((_, i) => i !== idx))} style={linkBtnStyle}>
                       remove
                     </button>
                   </li>
                 ))}
               </ul>
 
-              <AddRow
-                placeholder="Add a feature (e.g., Darkvision, Rage, Lucky)"
-                onAdd={(v) => update("traits", [...sheet.traits, v])}
-              />
+              <AddRow placeholder="Add a feature (e.g., Darkvision, Rage, Lucky)" onAdd={(v) => update("traits", [...sheet.traits, v])} />
             </div>
           </div>
 
@@ -1068,9 +1084,7 @@ export default function CharacterPage() {
           </div>
         </section>
 
-        <p style={{ marginTop: "1rem", opacity: 0.8 }}>
-          Tip: This page saves automatically (localStorage). Later we’ll tie it to login + database.
-        </p>
+        <p style={{ marginTop: "1rem", opacity: 0.8 }}>Tip: This page saves automatically (KV) under your login.</p>
       </div>
     </main>
   );
@@ -1164,13 +1178,7 @@ function Stat({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-function AddRow({
-  placeholder,
-  onAdd,
-}: {
-  placeholder: string;
-  onAdd: (value: string) => void;
-}) {
+function AddRow({ placeholder, onAdd }: { placeholder: string; onAdd: (value: string) => void }) {
   const [v, setV] = useState("");
   return (
     <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem" }}>
