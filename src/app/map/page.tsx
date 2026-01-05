@@ -130,17 +130,21 @@ export default function MapPage() {
   const towns: Town[] = useMemo(
     () => [
       {
-        id: "stonecross",
-        name: "Stonecross",
-        x: 50,
-        y: 10,
-        mapSrc: "/maps/towns/stonecross.jpg",
-        summary: "Mountain-ward stronghold and the heart of the realm.",
-        npcs: [
-          { name: "Captain of the Watch", location: "Gatehouse", note: "Keeps order." },
-          { name: "Archivist", location: "Hall of Records", note: "Knows old lore." },
-        ],
-      },
+  id: "stonecross",
+  name: "Stonecross",
+  x: 50,
+  y: 10,
+  views: [
+    { id: "vista", label: "Vista", src: "/maps/cities/stonecross/stonecross-vista.png" },
+    { id: "topdown", label: "Top Down", src: "/maps/cities/stonecross/stonecross-topdown.png" },
+  ],
+  summary: "Mountain-ward stronghold and the heart of the realm.",
+  npcs: [
+    { name: "Captain of the Watch", location: "Gatehouse", note: "Keeps order." },
+    { name: "Archivist", location: "Hall of Records", note: "Knows old lore." },
+  ],
+},
+
       {
         id: "stormwatch",
         name: "Stormwatch",
