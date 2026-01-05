@@ -155,8 +155,6 @@ export default function MapPage() {
   const [npcState, setNpcState] = useState<NPCState>({ npcs: [], lastUpdatedAt: "" });
   const lastNpcStamp = useRef<string>("");
   const [activeViewId, setActiveViewId] = useState<string>("");
-
-  // If you switch tabs/images, we bump this so TransformWrapper remounts (reset zoom)
   const [viewerKey, setViewerKey] = useState(0);
 
   const towns: Town[] = useMemo(
@@ -170,11 +168,7 @@ export default function MapPage() {
           { id: "vista", label: "Vista", src: "/maps/cities/stonecross/stonecross-vista.png" },
           { id: "topdown", label: "Top Down", src: "/maps/cities/stonecross/stonecross-topdown.png" },
         ],
-        summary: "Mountain-ward stronghold and the heart of the realm.",
-        npcs: [
-          { name: "Captain of the Watch", location: "Gatehouse", note: "Keeps order." },
-          { name: "Archivist", location: "Hall of Records", note: "Knows old lore." },
-        ],
+        summary: "Mountain-ward stronghold and the top of the realm.",
       },
       {
         id: "stormwatch",
