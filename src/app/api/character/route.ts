@@ -1,40 +1,46 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { kv } from "@vercel/kv";
 
 const DM_USERNAME = "jbeldiman";
 
-type CharacterSheet = unknown;
-
-function keyForUser(username: string) {
-  return `sc:char:${username}`;
+function norm(v: string) {
+  return (v || "").trim().toLowerCase();
 }
 
-export async function GET(req: Request) {
-  const url = new URL(req.url);
-  const username = (url.searchParams.get("username") || "").trim().toLowerCase();
+export async function GET(req: NextRequest) {
+  const actor = norm(req.headers.get("x-sc-user") || "");
+  const { searchParams } = new URL(req.url);
+  const username = norm(searchParams.get("username") || "");
 
   if (!username) {
-    return NextResponse.json({ error: "Missing username" }, { status: 400 });
+    return NextResponse.json({ sheet: null }, { status: 400 });
   }
 
-  const sheet = await kv.get<CharacterSheet>(keyForUser(username));
-  return NextResponse.json({ username, sheet: sheet ?? null });
+  const isDm = actor === DM_USERNAME;
+  const isSelf = actor && actor === username;
+
+  if (!isDm && !isSelf) {
+    return NextResponse.json({ sheet: null }, { status: 403 });
+  }
+
+  const sheet = await kv.get(`sc:character:${username}`);
+  return NextResponse.json({ sheet: sheet ?? null });
 }
 
-export async function PUT(req: Request) {
-  const actor = (req.headers.get("x-sc-user") || "").trim().toLowerCase();
-  if (!actor) return NextResponse.json({ error: "Missing actor" }, { status: 401 });
-
-  const body = (await req.json()) as { username?: string; sheet?: CharacterSheet };
-  const username = (body.username || "").trim().toLowerCase();
-
-  if (!username) return NextResponse.json({ error: "Missing username" }, { status: 400 });
-  if (actor !== username && actor !== DM_USERNAME) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+export async function POST(req: NextRequest) {
+  const actor = norm(req.headers.get("x-sc-user") || "");
+  if (!actor) {
+    return NextResponse.json({ ok: false }, { status: 401 });
   }
 
-  await kv.set(keyForUser(username), body.sheet ?? null);
-  await kv.sadd("sc:users", username);
+  const body = (await req.json().catch(() => null)) as { sheet?: unknown } | null;
+  const sheet = body?.sheet ?? null;
+
+  await kv.set(`sc:character:${actor}`, sheet);
+
+  if (actor !== DM_USERNAME) {
+    await kv.sadd("sc:users", actor);
+  }
 
   return NextResponse.json({ ok: true });
 }

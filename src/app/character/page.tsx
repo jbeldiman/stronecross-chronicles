@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import spellsData from "../../data/spells.json";
 import traitsData from "../../data/traits.json";
@@ -257,7 +257,9 @@ function normalizeSheet(raw: unknown): CharacterSheet {
       : {}) as CharacterSheet["skillProficiencies"],
 
     maxHp: Number.isFinite(Number(r.maxHp)) ? clamp(Number(r.maxHp), 1, 999) : base.maxHp,
-    currentHp: Number.isFinite(Number(r.currentHp)) ? clamp(Number(r.currentHp), 0, 999) : base.currentHp,
+    currentHp: Number.isFinite(Number(r.currentHp))
+      ? clamp(Number(r.currentHp), 0, 999)
+      : base.currentHp,
     tempHp: Number.isFinite(Number(r.tempHp)) ? clamp(Number(r.tempHp), 0, 999) : base.tempHp,
 
     baseAc: Number.isFinite(Number(r.baseAc)) ? clamp(Number(r.baseAc), 0, 50) : base.baseAc,
@@ -283,9 +285,10 @@ function normalizeSheet(raw: unknown): CharacterSheet {
 
     armor: isRecord(r.armor)
       ? {
-          name: typeof (r.armor as Record<string, unknown>).name === "string"
-            ? String((r.armor as Record<string, unknown>).name)
-            : "Armor",
+          name:
+            typeof (r.armor as Record<string, unknown>).name === "string"
+              ? String((r.armor as Record<string, unknown>).name)
+              : "Armor",
           acBonus: Number.isFinite(Number((r.armor as Record<string, unknown>).acBonus))
             ? Number((r.armor as Record<string, unknown>).acBonus)
             : 0,
@@ -295,9 +298,10 @@ function normalizeSheet(raw: unknown): CharacterSheet {
               : Number.isFinite(Number((r.armor as Record<string, unknown>).dexCap))
                 ? Number((r.armor as Record<string, unknown>).dexCap)
                 : null,
-          notes: typeof (r.armor as Record<string, unknown>).notes === "string"
-            ? String((r.armor as Record<string, unknown>).notes)
-            : "",
+          notes:
+            typeof (r.armor as Record<string, unknown>).notes === "string"
+              ? String((r.armor as Record<string, unknown>).notes)
+              : "",
         }
       : r.armor === null
         ? null
@@ -309,7 +313,9 @@ function normalizeSheet(raw: unknown): CharacterSheet {
     bond: typeof r.bond === "string" ? r.bond : base.bond,
     flaw: typeof r.flaw === "string" ? r.flaw : base.flaw,
 
-    traits: Array.isArray(r.traits) ? r.traits.filter((x): x is string => typeof x === "string") : base.traits,
+    traits: Array.isArray(r.traits)
+      ? r.traits.filter((x): x is string => typeof x === "string")
+      : base.traits,
 
     cantripIds: Array.isArray(r.cantripIds)
       ? r.cantripIds.filter((x): x is string => typeof x === "string")
@@ -349,18 +355,28 @@ function loadSession(): Session | null {
   }
 }
 
-async function fetchCharacter(username: string): Promise<CharacterSheet | null> {
-  const res = await fetch(`/api/character?u=${encodeURIComponent(username)}`, { cache: "no-store" });
-  if (!res.ok) return null;
-  const json = (await res.json()) as { ok?: boolean; data?: unknown };
-  return json?.data ? normalizeSheet(json.data) : null;
+function normalizeUsername(v: string) {
+  return (v || "").trim().toLowerCase();
 }
 
-async function saveCharacter(username: string, sheet: CharacterSheet): Promise<boolean> {
-  const res = await fetch(`/api/character?u=${encodeURIComponent(username)}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(sheet),
+async function fetchCharacter(actor: string): Promise<CharacterSheet | null> {
+  const res = await fetch(`/api/character?username=${encodeURIComponent(actor)}`, {
+    headers: { "x-sc-user": actor },
+    cache: "no-store",
+  });
+  if (!res.ok) return null;
+  const json = (await res.json()) as { sheet?: unknown };
+  return json?.sheet ? normalizeSheet(json.sheet) : null;
+}
+
+async function saveCharacter(actor: string, sheet: CharacterSheet): Promise<boolean> {
+  const res = await fetch(`/api/character`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-sc-user": actor,
+    },
+    body: JSON.stringify({ sheet }),
   });
   return res.ok;
 }
@@ -372,13 +388,19 @@ export default function CharacterPage() {
   const [sheet, setSheet] = useState<CharacterSheet>(() => defaultSheet());
   const [selectedSpellId, setSelectedSpellId] = useState<string>("");
 
+  const [loading, setLoading] = useState(true);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+
+  const loadedFromKvRef = useRef(false);
+  const saveTimerRef = useRef<number | null>(null);
+
   useEffect(() => {
     const s = loadSession();
     if (!s) {
       router.replace("/login?next=/character");
       return;
     }
-    setSession(s);
+    setSession({ ...s, username: normalizeUsername(s.username) });
   }, [router]);
 
   useEffect(() => {
@@ -387,9 +409,17 @@ export default function CharacterPage() {
     let cancelled = false;
 
     (async () => {
-      const loaded = await fetchCharacter(session.username);
-      if (cancelled) return;
-      setSheet(loaded ?? defaultSheet());
+      setLoading(true);
+      try {
+        const loaded = await fetchCharacter(session.username);
+        if (cancelled) return;
+        setSheet(loaded ?? defaultSheet());
+      } finally {
+        if (!cancelled) {
+          loadedFromKvRef.current = true;
+          setLoading(false);
+        }
+      }
     })();
 
     return () => {
@@ -399,12 +429,24 @@ export default function CharacterPage() {
 
   useEffect(() => {
     if (!session?.username) return;
+    if (!loadedFromKvRef.current) return;
 
-    const t = window.setTimeout(() => {
-      void saveCharacter(session.username, sheet);
+    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+
+    setSaveState("saving");
+
+    saveTimerRef.current = window.setTimeout(async () => {
+      try {
+        const ok = await saveCharacter(session.username, sheet);
+        setSaveState(ok ? "saved" : "error");
+      } catch {
+        setSaveState("error");
+      }
     }, 450);
 
-    return () => window.clearTimeout(t);
+    return () => {
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    };
   }, [sheet, session?.username]);
 
   const spellsById = useMemo(() => {
@@ -468,10 +510,26 @@ export default function CharacterPage() {
             <h1 style={{ marginBottom: "0.5rem" }}>Character Sheet</h1>
             <div style={{ opacity: 0.75, fontSize: "0.95rem" }}>
               Logged in as <strong>{session.username}</strong>
+              {" "}
+              {loading ? (
+                <span style={{ opacity: 0.75 }}>• Loading…</span>
+              ) : (
+                <span style={{ opacity: 0.75 }}>
+                  • {saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved" : saveState === "error" ? "Save failed" : ""}
+                </span>
+              )}
             </div>
           </div>
+
           <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
-            <button onClick={() => router.push("/logout")} style={{ ...btnStyle, background: "rgba(255,255,255,0.06)" }}>
+            <button
+              onClick={() => {
+                localStorage.removeItem(AUTH_SESSION_KEY);
+                router.replace("/");
+              }}
+              style={{ ...btnStyle, background: "rgba(255,255,255,0.06)" }}
+              title="Log out"
+            >
               Log out
             </button>
           </div>
@@ -550,7 +608,10 @@ export default function CharacterPage() {
                       type="number"
                       value={score}
                       onChange={(e) =>
-                        update("abilities", { ...sheet.abilities, [ab]: clamp(Number(e.target.value), 1, 30) })
+                        update("abilities", {
+                          ...sheet.abilities,
+                          [ab]: clamp(Number(e.target.value), 1, 30),
+                        })
                       }
                       style={inputStyle}
                     />
@@ -659,13 +720,19 @@ export default function CharacterPage() {
               {sheet.inventory.map((it, idx) => (
                 <li key={`${it}-${idx}`} style={{ margin: "0.25rem 0" }}>
                   {it}{" "}
-                  <button onClick={() => update("inventory", sheet.inventory.filter((_, i) => i !== idx))} style={linkBtnStyle}>
+                  <button
+                    onClick={() => update("inventory", sheet.inventory.filter((_, i) => i !== idx))}
+                    style={linkBtnStyle}
+                  >
                     remove
                   </button>
                 </li>
               ))}
             </ul>
-            <AddRow placeholder="Add an item (e.g., Healing Potion)" onAdd={(v) => update("inventory", [...sheet.inventory, v])} />
+            <AddRow
+              placeholder="Add an item (e.g., Healing Potion)"
+              onAdd={(v) => update("inventory", [...sheet.inventory, v])}
+            />
           </section>
         </div>
 
@@ -674,7 +741,14 @@ export default function CharacterPage() {
             <h2 style={h2}>Weapons</h2>
             {sheet.weapons.map((w, idx) => (
               <div key={`${w.name}-${idx}`} style={miniCardStyle}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 90px 110px 1fr", gap: "0.75rem", alignItems: "end" }}>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 90px 110px 1fr",
+                    gap: "0.75rem",
+                    alignItems: "end",
+                  }}
+                >
                   <Field label="Name">
                     <input
                       value={w.name}
@@ -726,7 +800,10 @@ export default function CharacterPage() {
                   </Field>
                 </div>
 
-                <button onClick={() => update("weapons", sheet.weapons.filter((_, i) => i !== idx))} style={{ ...linkBtnStyle, marginTop: "0.5rem" }}>
+                <button
+                  onClick={() => update("weapons", sheet.weapons.filter((_, i) => i !== idx))}
+                  style={{ ...linkBtnStyle, marginTop: "0.5rem" }}
+                >
                   remove weapon
                 </button>
               </div>
@@ -734,7 +811,10 @@ export default function CharacterPage() {
 
             <button
               onClick={() =>
-                update("weapons", [...sheet.weapons, { name: "New Weapon", toHitBonus: 0, damageBonus: 0, magicalEffects: "" }])
+                update("weapons", [
+                  ...sheet.weapons,
+                  { name: "New Weapon", toHitBonus: 0, damageBonus: 0, magicalEffects: "" },
+                ])
               }
               style={btnStyle}
             >
@@ -834,7 +914,10 @@ export default function CharacterPage() {
                 </button>
               </>
             ) : (
-              <button onClick={() => update("armor", { name: "Armor", acBonus: 0, dexCap: null, notes: "" })} style={btnStyle}>
+              <button
+                onClick={() => update("armor", { name: "Armor", acBonus: 0, dexCap: null, notes: "" })}
+                style={btnStyle}
+              >
                 + Add Armor
               </button>
             )}
@@ -942,7 +1025,9 @@ export default function CharacterPage() {
                   <div style={{ marginTop: "0.75rem" }}>
                     <strong style={{ display: "block", marginBottom: "0.25rem" }}>Personality Trait</strong>
                     <TraitPicker
-                      entries={TRAITS.filter((t) => t.background === sheet.background && t.type === "Personality Trait")}
+                      entries={TRAITS.filter(
+                        (t) => t.background === sheet.background && t.type === "Personality Trait"
+                      )}
                       value={sheet.personalityTrait}
                       onPick={(v) => update("personalityTrait", v)}
                     />
@@ -988,14 +1073,20 @@ export default function CharacterPage() {
                 {sheet.traits.map((t, idx) => (
                   <li key={`${t}-${idx}`} style={{ margin: "0.25rem 0" }}>
                     {t}{" "}
-                    <button onClick={() => update("traits", sheet.traits.filter((_, i) => i !== idx))} style={linkBtnStyle}>
+                    <button
+                      onClick={() => update("traits", sheet.traits.filter((_, i) => i !== idx))}
+                      style={linkBtnStyle}
+                    >
                       remove
                     </button>
                   </li>
                 ))}
               </ul>
 
-              <AddRow placeholder="Add a feature (e.g., Darkvision, Rage, Lucky)" onAdd={(v) => update("traits", [...sheet.traits, v])} />
+              <AddRow
+                placeholder="Add a feature (e.g., Darkvision, Rage, Lucky)"
+                onAdd={(v) => update("traits", [...sheet.traits, v])}
+              />
             </div>
           </div>
 
