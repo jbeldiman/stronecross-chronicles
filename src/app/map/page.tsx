@@ -16,12 +16,19 @@ type TownId =
   | "shatteredisles"
   | "greenshadow";
 
+type TownView = {
+  id: string; 
+  label: string;
+  src: string;
+};
+
 type Town = {
   id: TownId;
   name: string;
   x: number;
   y: number;
-  mapSrc?: string;
+  mapSrc?: string; 
+  views?: TownView[]; 
   summary?: string;
   npcs?: { name: string; location: string; note?: string }[];
 };
@@ -33,6 +40,21 @@ type Session = {
 
 type UnlockState = {
   unlocked: TownId[];
+  lastUpdatedAt: string;
+};
+
+type NPC = {
+  id: string;
+  name: string;
+  title: string;
+  townId: TownId;
+  comments?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type NPCState = {
+  npcs: NPC[];
   lastUpdatedAt: string;
 };
 
@@ -67,19 +89,26 @@ function saveUnlockedLocal(ids: TownId[]) {
   localStorage.setItem(STORAGE_UNLOCKS, JSON.stringify(ids));
 }
 
-async function fetchRemote(room: string): Promise<UnlockState | null> {
+async function fetchRemoteUnlocks(room: string): Promise<UnlockState | null> {
   const res = await fetch(`/api/map-unlocks?room=${encodeURIComponent(room)}`, { cache: "no-store" });
   if (!res.ok) return null;
   const json = (await res.json()) as { data: UnlockState | null };
   return json.data ?? null;
 }
 
-async function pushRemote(room: string, state: UnlockState): Promise<void> {
+async function pushRemoteUnlocks(room: string, state: UnlockState): Promise<void> {
   await fetch(`/api/map-unlocks?room=${encodeURIComponent(room)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(state),
   });
+}
+
+async function fetchNPCs(room: string): Promise<NPCState | null> {
+  const res = await fetch(`/api/npcs?room=${encodeURIComponent(room)}`, { cache: "no-store" });
+  if (!res.ok) return null;
+  const json = (await res.json()) as { data: NPCState | null };
+  return json.data ?? null;
 }
 
 export default function MapPage() {
@@ -93,8 +122,10 @@ export default function MapPage() {
   const [selected, setSelected] = useState<Town | null>(null);
 
   const [playerPreview, setPlayerPreview] = useState(false);
-
-  const lastRemoteStamp = useRef<string>("");
+  const lastUnlockStamp = useRef<string>("");
+  const [npcState, setNpcState] = useState<NPCState>({ npcs: [], lastUpdatedAt: "" });
+  const lastNpcStamp = useRef<string>("");
+  const [activeViewId, setActiveViewId] = useState<string>("");
 
   const towns: Town[] = useMemo(
     () => [
@@ -149,7 +180,10 @@ export default function MapPage() {
         name: "Sunspire",
         x: 62,
         y: 62,
-        mapSrc: "/maps/towns/sunspire.jpg",
+        views: [
+          { id: "vista", label: "Vista", src: "/maps/cities/sunspire/sunspire-vista.png" },
+          { id: "topdown", label: "Top Down", src: "/maps/cities/sunspire/sunspire-topdown.png" },
+        ],
         summary: "Golden spires, trade routes, and bright banners.",
       },
       {
@@ -188,7 +222,7 @@ export default function MapPage() {
 
     const local = loadUnlockedLocal();
     setUnlocked(local);
-  }, []);
+  }, [router]);
 
   const isDm = session?.username === DM_USERNAME;
   const effectiveIsDm = Boolean(isDm && !playerPreview);
@@ -199,15 +233,15 @@ export default function MapPage() {
     if (!isClient || !session) return;
 
     (async () => {
-      const remote = await fetchRemote(room);
+      const remote = await fetchRemoteUnlocks(room);
       if (remote?.unlocked) {
-        lastRemoteStamp.current = remote.lastUpdatedAt || "";
+        lastUnlockStamp.current = remote.lastUpdatedAt || "";
         setUnlocked(remote.unlocked);
         saveUnlockedLocal(remote.unlocked);
       } else if (isDm) {
         const seed: UnlockState = { unlocked: loadUnlockedLocal(), lastUpdatedAt: new Date().toISOString() };
-        await pushRemote(room, seed);
-        lastRemoteStamp.current = seed.lastUpdatedAt;
+        await pushRemoteUnlocks(room, seed);
+        lastUnlockStamp.current = seed.lastUpdatedAt;
       }
     })();
   }, [isClient, session, room, isDm]);
@@ -217,11 +251,11 @@ export default function MapPage() {
     if (isDm) return;
 
     const t = window.setInterval(async () => {
-      const remote = await fetchRemote(room);
+      const remote = await fetchRemoteUnlocks(room);
       if (!remote) return;
       const stamp = remote.lastUpdatedAt || "";
-      if (stamp && stamp !== lastRemoteStamp.current) {
-        lastRemoteStamp.current = stamp;
+      if (stamp && stamp !== lastUnlockStamp.current) {
+        lastUnlockStamp.current = stamp;
         setUnlocked(remote.unlocked || DEFAULT_UNLOCKED);
         saveUnlockedLocal(remote.unlocked || DEFAULT_UNLOCKED);
       }
@@ -238,12 +272,86 @@ export default function MapPage() {
       saveUnlockedLocal(next);
 
       const state: UnlockState = { unlocked: next, lastUpdatedAt: new Date().toISOString() };
-      pushRemote(room, state);
-      lastRemoteStamp.current = state.lastUpdatedAt;
+      pushRemoteUnlocks(room, state);
+      lastUnlockStamp.current = state.lastUpdatedAt;
 
       return next;
     });
   }
+
+  useEffect(() => {
+    if (!isClient || !session) return;
+
+    (async () => {
+      const remote = await fetchNPCs(room);
+      if (!remote) return;
+      lastNpcStamp.current = remote.lastUpdatedAt || "";
+      setNpcState(remote);
+    })();
+  }, [isClient, session, room]);
+
+  useEffect(() => {
+    if (!isClient || !session) return;
+    if (isDm) return;
+
+    const t = window.setInterval(async () => {
+      const remote = await fetchNPCs(room);
+      if (!remote) return;
+      const stamp = remote.lastUpdatedAt || "";
+      if (stamp && stamp !== lastNpcStamp.current) {
+        lastNpcStamp.current = stamp;
+        setNpcState(remote);
+      }
+    }, 1500);
+
+    return () => window.clearInterval(t);
+  }, [isClient, session, room, isDm]);
+
+  useEffect(() => {
+    if (!selected) return;
+
+    if (selected.views && selected.views.length) {
+      setActiveViewId(selected.views[0].id);
+    } else {
+      setActiveViewId("");
+    }
+  }, [selected]);
+
+  const remoteNpcsForSelected = useMemo(() => {
+    if (!selected) return [];
+    return npcState.npcs.filter((n) => n.townId === selected.id);
+  }, [npcState.npcs, selected]);
+
+  const mergedNpcsForSelected = useMemo(() => {
+    if (!selected) return [];
+
+    const local = (selected.npcs || []).map((n) => ({
+      key: `local:${selected.id}:${n.name}:${n.location}`,
+      name: n.name,
+      title: n.location, 
+      comments: n.note,
+      source: "local" as const,
+    }));
+
+    const remote = remoteNpcsForSelected.map((n) => ({
+      key: `remote:${n.id}`,
+      name: n.name,
+      title: n.title,
+      comments: n.comments,
+      source: "remote" as const,
+    }));
+
+    return [...remote, ...local];
+  }, [remoteNpcsForSelected, selected]);
+
+  const activeImageSrc = useMemo(() => {
+    if (!selected) return "";
+    if (selected.views && selected.views.length) {
+      const v = selected.views.find((x) => x.id === activeViewId) ?? selected.views[0];
+      return v?.src || "";
+    }
+    return selected.mapSrc || "";
+  }, [selected, activeViewId]);
 
   if (!isClient || !session) {
     return (
@@ -436,9 +544,37 @@ export default function MapPage() {
 
               <div style={{ display: "grid", gridTemplateColumns: "1.2fr 0.8fr", gap: 0 }}>
                 <div style={{ borderRight: "1px solid rgba(255,255,255,0.08)" }}>
-                  {selected.mapSrc ? (
+                  {/* Multi-view tabs if available */}
+                  {selected.views && selected.views.length ? (
+                    <div style={{ padding: "0.75rem 0.75rem 0", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
+                      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                        {selected.views.map((v) => {
+                          const on = v.id === activeViewId;
+                          return (
+                            <button
+                              key={`${selected.id}-view-${v.id}`}
+                              onClick={() => setActiveViewId(v.id)}
+                              style={{
+                                padding: "0.45rem 0.65rem",
+                                borderRadius: 12,
+                                border: "1px solid rgba(255,255,255,0.12)",
+                                background: on ? "rgba(212,175,55,0.18)" : "rgba(0,0,0,0.25)",
+                                color: "white",
+                                cursor: "pointer",
+                              }}
+                              title={v.label}
+                            >
+                              {v.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {activeImageSrc ? (
                     <img
-                      src={selected.mapSrc}
+                      src={activeImageSrc}
                       alt={`${selected.name} map`}
                       style={{ width: "100%", display: "block", maxHeight: "70vh", objectFit: "contain", background: "#0b0b0b" }}
                       draggable={false}
@@ -454,18 +590,25 @@ export default function MapPage() {
                 <div style={{ padding: "1rem" }}>
                   <h3 style={h3}>Important NPCs</h3>
 
-                  {selected.npcs && selected.npcs.length ? (
+                  {mergedNpcsForSelected.length ? (
                     <ul style={{ paddingLeft: "1rem", marginTop: "0.5rem" }}>
-                      {selected.npcs.map((n) => (
-                        <li key={`${selected.id}-${n.name}`} style={{ margin: "0.35rem 0" }}>
-                          <strong>{n.name}</strong> <span style={{ opacity: 0.8 }}>— {n.location}</span>
-                          {n.note ? <div style={{ opacity: 0.75, fontSize: "0.92rem", marginTop: "0.15rem" }}>{n.note}</div> : null}
+                      {mergedNpcsForSelected.map((n) => (
+                        <li key={n.key} style={{ margin: "0.45rem 0" }}>
+                          <strong>{n.name}</strong>{" "}
+                          <span style={{ opacity: 0.85 }}>— {n.title}</span>
+                          {n.comments ? (
+                            <div style={{ opacity: 0.75, fontSize: "0.92rem", marginTop: "0.15rem" }}>{n.comments}</div>
+                          ) : null}
                         </li>
                       ))}
                     </ul>
                   ) : (
                     <p style={{ opacity: 0.8, marginTop: "0.5rem" }}>No NPCs listed yet.</p>
                   )}
+
+                  <div style={{ marginTop: "0.85rem", opacity: 0.6, fontSize: "0.85rem" }}>
+              
+                  </div>
                 </div>
               </div>
             </div>
