@@ -4,13 +4,6 @@ import React, { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 const AUTH_SESSION_KEY = "stonecross.session.v1";
-const AUTH_USERS_KEY = "stonecross.users.v1";
-
-type StoredUser = {
-  username: string;
-  passwordHash: string;
-  createdAt: string;
-};
 
 function normalizeUsername(v: string) {
   return v.trim().toLowerCase();
@@ -23,19 +16,24 @@ async function sha256Hex(input: string): Promise<string> {
   return bytes.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function loadUsers(): Record<string, StoredUser> {
-  try {
-    const raw = localStorage.getItem(AUTH_USERS_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
+async function apiSignup(username: string, passwordHash: string) {
+  const res = await fetch("/api/auth/signup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, passwordHash }),
+  });
+  const json = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, json };
 }
 
-function saveUsers(users: Record<string, StoredUser>) {
-  localStorage.setItem(AUTH_USERS_KEY, JSON.stringify(users));
+async function apiLogin(username: string, passwordHash: string) {
+  const res = await fetch("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, passwordHash }),
+  });
+  const json = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, json };
 }
 
 function LoginInner() {
@@ -85,45 +83,30 @@ function LoginInner() {
         return;
       }
 
-      const users = loadUsers();
-      const existing = users[u];
-
       const hash = await sha256Hex(`${u}:${p}`);
 
       if (mode === "signup") {
-        if (existing) {
-          setError("That username already exists. Try logging in instead.");
+        const r = await apiSignup(u, hash);
+        if (!r.ok) {
+          if (r.status === 409) setError("That username already exists. Try logging in instead.");
+          else setError("Signup failed. Try again.");
           return;
         }
-        users[u] = {
-          username: u,
-          passwordHash: hash,
-          createdAt: new Date().toISOString(),
-        };
-        saveUsers(users);
 
-        localStorage.setItem(
-          AUTH_SESSION_KEY,
-          JSON.stringify({ username: u, loggedInAt: new Date().toISOString() })
-        );
-
+        localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify({ username: u, loggedInAt: new Date().toISOString() }));
         router.replace(next);
         return;
       }
 
-      if (!existing) {
-        setError("Account not found. Switch to Create Account to register.");
-        return;
-      }
-      if (existing.passwordHash !== hash) {
-        setError("Incorrect password.");
+      const r = await apiLogin(u, hash);
+      if (!r.ok) {
+        if (r.status === 404) setError("Account not found. Switch to Create Account to register.");
+        else if (r.status === 401) setError("Incorrect password.");
+        else setError("Login failed. Try again.");
         return;
       }
 
-      localStorage.setItem(
-        AUTH_SESSION_KEY,
-        JSON.stringify({ username: u, loggedInAt: new Date().toISOString() })
-      );
+      localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify({ username: u, loggedInAt: new Date().toISOString() }));
       router.replace(next);
     } finally {
       setBusy(false);
@@ -138,13 +121,9 @@ function LoginInner() {
         <section style={cardStyle}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem" }}>
             <div>
-              <h1 style={{ marginBottom: "0.25rem" }}>
-                {mode === "login" ? "Log in" : "Create account"}
-              </h1>
+              <h1 style={{ marginBottom: "0.25rem" }}>{mode === "login" ? "Log in" : "Create account"}</h1>
               <p style={{ opacity: 0.85, marginBottom: "1rem" }}>
-                {mode === "login"
-                  ? "Log in to access your character."
-                  : "Create an account to save your character on this device."}
+                {mode === "login" ? "Log in to access your character." : "Create an account to save your character."}
               </p>
             </div>
 
@@ -199,12 +178,18 @@ function LoginInner() {
             >
               Back to Home
             </button>
+
+            <button
+              onClick={() => router.push("/logout")}
+              style={{ ...btnStyle, background: "rgba(255, 80, 80, 0.16)", border: "1px solid rgba(255, 80, 80, 0.25)" }}
+              disabled={busy}
+            >
+              Log out
+            </button>
           </div>
 
           <p style={{ marginTop: "1rem", opacity: 0.75, lineHeight: 1.35 }}>
             You’ll be redirected to: <strong>{next}</strong>
-            <br />
-            (This v1 stores accounts locally on this device. We’ll upgrade to real database login later.)
           </p>
         </section>
       </div>
