@@ -175,10 +175,12 @@ export default function MapPage() {
         name: "Stormwatch",
         x: 23,
         y: 33,
-        mapSrc: "/maps/towns/stormwatch.jpg",
-        summary: "A lonely tower-town guarding the northern pass.",
-        npcs: [{ name: "Harbormaster", location: "Docks", note: "Sees everything." }],
-      },
+        views: [
+          { id: "vista", label: "Vista", src: "/maps/cities/stormwatch/stormwatch-vista.png" },
+          { id: "topdown", label: "Top Down", src: "/maps/cities/stormwatch/stormwatch-topdown.png" },
+      ],
+  summary: "A lonely tower-town guarding the northern pass.",
+},
       {
         id: "westhaven",
         name: "Westhaven",
@@ -186,7 +188,6 @@ export default function MapPage() {
         y: 55,
         mapSrc: "/maps/towns/westhaven.jpg",
         summary: "Coastal port with salt air and sharper politics.",
-        npcs: [{ name: "Innkeeper", location: "The Gilded Gull", note: "Hears rumors nightly." }],
       },
       {
         id: "greenshadow",
@@ -276,7 +277,6 @@ export default function MapPage() {
     })();
   }, [isClient, session, room, isDm]);
 
-  // Player polling for unlocks
   useEffect(() => {
     if (!isClient || !session) return;
     if (isDm) return;
@@ -310,7 +310,6 @@ export default function MapPage() {
     });
   }
 
-  // NPC initial load
   useEffect(() => {
     if (!isClient || !session) return;
 
@@ -322,7 +321,6 @@ export default function MapPage() {
     })();
   }, [isClient, session, room]);
 
-  // NPC polling for players
   useEffect(() => {
     if (!isClient || !session) return;
     if (isDm) return;
@@ -340,7 +338,6 @@ export default function MapPage() {
     return () => window.clearInterval(t);
   }, [isClient, session, room, isDm]);
 
-  // When selecting a town, default to first view if it has views
   useEffect(() => {
     if (!selected) return;
 
