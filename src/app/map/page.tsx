@@ -133,7 +133,6 @@ function ZoomControls({
         Reset
       </button>
       <span style={{ opacity: 0.7, fontSize: "0.85rem", marginLeft: "0.25rem" }}>
-        Scroll to zoom • Drag to pan • Double-click to zoom
       </span>
     </div>
   );
@@ -676,7 +675,6 @@ export default function MapPage() {
                   )}
 
                   <div style={{ marginTop: "0.85rem", opacity: 0.6, fontSize: "0.85rem" }}>
-                    NPCs are synced per room. Add/edit them on the DM page.
                   </div>
                 </div>
               </div>
