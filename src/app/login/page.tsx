@@ -1,16 +1,9 @@
 "use client";
 
-import React, { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 const AUTH_SESSION_KEY = "stonecross.session.v1";
-const AUTH_USERS_KEY = "stonecross.users.v1";
-
-type StoredUser = {
-  username: string;
-  passwordHash: string;
-  createdAt: string;
-};
 
 function normalizeUsername(v: string) {
   return v.trim().toLowerCase();
@@ -23,32 +16,24 @@ async function sha256Hex(input: string): Promise<string> {
   return bytes.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function loadUsers(): Record<string, StoredUser> {
-  try {
-    const raw = localStorage.getItem(AUTH_USERS_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
+async function apiSignup(username: string, passwordHash: string) {
+  const res = await fetch("/api/auth/signup", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username, passwordHash }),
+  });
+  const json = (await res.json().catch(() => ({}))) as any;
+  return { ok: res.ok, status: res.status, json };
 }
 
-function saveUsers(users: Record<string, StoredUser>) {
-  localStorage.setItem(AUTH_USERS_KEY, JSON.stringify(users));
-}
-
-async function registerUserInKv(username: string) {
-  try {
-    await fetch("/api/users", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-sc-user": username,
-      },
-      body: JSON.stringify({ username }),
-    });
-  } catch {}
+async function apiLogin(username: string, passwordHash: string) {
+  const res = await fetch("/api/auth/login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username, passwordHash }),
+  });
+  const json = (await res.json().catch(() => ({}))) as any;
+  return { ok: res.ok, status: res.status, json };
 }
 
 function LoginInner() {
@@ -78,13 +63,18 @@ function LoginInner() {
   }, [params]);
 
   useEffect(() => {
-    const existing = localStorage.getItem(AUTH_SESSION_KEY);
-    if (existing) router.replace(next);
+    try {
+      const existing = localStorage.getItem(AUTH_SESSION_KEY);
+      if (existing) router.replace(next);
+    } catch {}
   }, [router, next]);
 
   async function handleSubmit() {
+    if (busy) return;
+
     setError("");
     setBusy(true);
+
     try {
       const u = normalizeUsername(username);
       const p = password;
@@ -98,39 +88,36 @@ function LoginInner() {
         return;
       }
 
-      const users = loadUsers();
-      const existing = users[u];
-
       const hash = await sha256Hex(`${u}:${p}`);
 
       if (mode === "signup") {
-        if (existing) {
-          setError("That username already exists. Try logging in instead.");
+        const out = await apiSignup(u, hash);
+        if (!out.ok) {
+          if (out.status === 409 || out.json?.error === "user_exists") {
+            setError("That username already exists. Try logging in instead.");
+          } else {
+            setError("Could not create account. Please try again.");
+          }
           return;
         }
-        users[u] = {
-          username: u,
-          passwordHash: hash,
-          createdAt: new Date().toISOString(),
-        };
-        saveUsers(users);
 
         localStorage.setItem(
           AUTH_SESSION_KEY,
           JSON.stringify({ username: u, loggedInAt: new Date().toISOString() })
         );
-
-        await registerUserInKv(u);
         router.replace(next);
         return;
       }
 
-      if (!existing) {
-        setError("Account not found. Switch to Create Account to register.");
-        return;
-      }
-      if (existing.passwordHash !== hash) {
-        setError("Incorrect password.");
+      const out = await apiLogin(u, hash);
+      if (!out.ok) {
+        if (out.status === 404 || out.json?.error === "not_found") {
+          setError("Account not found. Switch to Create account to register.");
+        } else if (out.status === 401 || out.json?.error === "bad_password") {
+          setError("Incorrect password.");
+        } else {
+          setError("Login failed. Please try again.");
+        }
         return;
       }
 
@@ -138,8 +125,6 @@ function LoginInner() {
         AUTH_SESSION_KEY,
         JSON.stringify({ username: u, loggedInAt: new Date().toISOString() })
       );
-
-      await registerUserInKv(u);
       router.replace(next);
     } finally {
       setBusy(false);
@@ -154,13 +139,11 @@ function LoginInner() {
         <section style={cardStyle}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem" }}>
             <div>
-              <h1 style={{ marginBottom: "0.25rem" }}>
-                {mode === "login" ? "Log in" : "Create account"}
-              </h1>
+              <h1 style={{ marginBottom: "0.25rem" }}>{mode === "login" ? "Log in" : "Create account"}</h1>
               <p style={{ opacity: 0.85, marginBottom: "1rem" }}>
                 {mode === "login"
-                  ? "Log in to access your character."
-                  : "Create an account to save your character on this device."}
+                  ? "Log in to access your character from any device."
+                  : "Create an account to save your character for future sessions across devices."}
               </p>
             </div>
 
@@ -219,6 +202,11 @@ function LoginInner() {
 
           <p style={{ marginTop: "1rem", opacity: 0.75, lineHeight: 1.35 }}>
             You’ll be redirected to: <strong>{next}</strong>
+          </p>
+
+          <p style={{ marginTop: "0.6rem", opacity: 0.7, lineHeight: 1.35 }}>
+            Important: characters are saved on the server under your username. Use the same username/password on any device
+            to load the same character.
           </p>
         </section>
       </div>
