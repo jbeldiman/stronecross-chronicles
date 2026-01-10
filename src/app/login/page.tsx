@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 const AUTH_SESSION_KEY = "stonecross.session.v1";
 
 function normalizeUsername(v: string) {
-  return v.trim().toLowerCase();
+  return (v || "").trim().toLowerCase();
 }
 
 async function sha256Hex(input: string): Promise<string> {
@@ -36,16 +36,19 @@ async function apiLogin(username: string, passwordHash: string) {
   return { ok: res.ok, status: res.status, json };
 }
 
+async function apiResetPassword(token: string, passwordHash: string) {
+  const res = await fetch("/api/auth/reset", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token, passwordHash }),
+  });
+  const json = (await res.json().catch(() => ({}))) as any;
+  return { ok: res.ok, status: res.status, json };
+}
+
 function LoginInner() {
   const router = useRouter();
   const params = useSearchParams();
-
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-
-  const [mode, setMode] = useState<"login" | "signup">("login");
-  const [error, setError] = useState<string>("");
-  const [busy, setBusy] = useState(false);
 
   const next = useMemo(() => {
     const paramNext = params.get("next");
@@ -62,12 +65,35 @@ function LoginInner() {
     return "/character";
   }, [params]);
 
+  const resetToken = useMemo(() => (params.get("reset") || "").trim(), [params]);
+  const resetUser = useMemo(() => (params.get("user") || "").trim(), [params]);
+  const isReset = !!resetToken && !!resetUser;
+
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+
+  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [error, setError] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+
   useEffect(() => {
+    if (isReset) {
+      setMode("login");
+      setUsername(normalizeUsername(resetUser));
+      setPassword("");
+      setConfirmPassword("");
+      setError("");
+    }
+  }, [isReset, resetUser]);
+
+  useEffect(() => {
+    if (isReset) return;
     try {
       const existing = localStorage.getItem(AUTH_SESSION_KEY);
       if (existing) router.replace(next);
     } catch {}
-  }, [router, next]);
+  }, [router, next, isReset]);
 
   async function handleSubmit() {
     if (busy) return;
@@ -83,8 +109,41 @@ function LoginInner() {
         setError("Please enter a username.");
         return;
       }
+
       if (!p || p.length < 6) {
         setError("Password must be at least 6 characters.");
+        return;
+      }
+
+      if (isReset) {
+        if (normalizeUsername(resetUser) !== u) {
+          setError("This reset link is for a different username.");
+          return;
+        }
+        if (p !== confirmPassword) {
+          setError("Passwords do not match.");
+          return;
+        }
+
+        const hash = await sha256Hex(`${u}:${p}`);
+        const out = await apiResetPassword(resetToken, hash);
+
+        if (!out.ok) {
+          if (out.json?.error === "invalid_or_expired") {
+            setError("Reset link expired. Ask the DM for a new one.");
+          } else if (out.status === 404 || out.json?.error === "not_found") {
+            setError("Account not found.");
+          } else {
+            setError("Reset failed. Please try again.");
+          }
+          return;
+        }
+
+        localStorage.setItem(
+          AUTH_SESSION_KEY,
+          JSON.stringify({ username: u, loggedInAt: new Date().toISOString() })
+        );
+        router.replace(next);
         return;
       }
 
@@ -139,21 +198,27 @@ function LoginInner() {
         <section style={cardStyle}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem" }}>
             <div>
-              <h1 style={{ marginBottom: "0.25rem" }}>{mode === "login" ? "Log in" : "Create account"}</h1>
+              <h1 style={{ marginBottom: "0.25rem" }}>
+                {isReset ? "Reset password" : mode === "login" ? "Log in" : "Create account"}
+              </h1>
               <p style={{ opacity: 0.85, marginBottom: "1rem" }}>
-                {mode === "login"
-                  ? "Log in to access your character from any device."
-                  : "Create an account to save your character for future sessions across devices."}
+                {isReset
+                  ? "Set a new password for your account."
+                  : mode === "login"
+                    ? "Log in to access your character from any device."
+                    : "Create an account to save your character for future sessions across devices."}
               </p>
             </div>
 
-            <button
-              onClick={() => setMode(mode === "login" ? "signup" : "login")}
-              style={ghostBtnStyle}
-              disabled={busy}
-            >
-              {mode === "login" ? "Create account" : "Have an account?"}
-            </button>
+            {!isReset ? (
+              <button
+                onClick={() => setMode(mode === "login" ? "signup" : "login")}
+                style={ghostBtnStyle}
+                disabled={busy}
+              >
+                {mode === "login" ? "Create account" : "Have an account?"}
+              </button>
+            ) : null}
           </div>
 
           <label style={{ display: "block" }}>
@@ -164,19 +229,20 @@ function LoginInner() {
               placeholder="e.g., rangerqueen"
               style={inputStyle}
               autoComplete="username"
-              disabled={busy}
+              disabled={busy || isReset}
+              readOnly={isReset}
             />
           </label>
 
           <label style={{ display: "block", marginTop: "0.75rem" }}>
-            <div style={labelStyle}>Password</div>
+            <div style={labelStyle}>{isReset ? "New Password" : "Password"}</div>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
               style={inputStyle}
-              autoComplete={mode === "login" ? "current-password" : "new-password"}
+              autoComplete={isReset ? "new-password" : mode === "login" ? "current-password" : "new-password"}
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleSubmit();
               }}
@@ -184,11 +250,29 @@ function LoginInner() {
             />
           </label>
 
+          {isReset ? (
+            <label style={{ display: "block", marginTop: "0.75rem" }}>
+              <div style={labelStyle}>Confirm New Password</div>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="••••••••"
+                style={inputStyle}
+                autoComplete="new-password"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSubmit();
+                }}
+                disabled={busy}
+              />
+            </label>
+          ) : null}
+
           {error ? <p style={{ marginTop: "0.75rem", color: "#ffb4b4" }}>{error}</p> : null}
 
           <div style={{ display: "flex", gap: "0.75rem", marginTop: "1rem" }}>
             <button onClick={handleSubmit} style={btnStyle} disabled={busy}>
-              {busy ? "Please wait…" : mode === "login" ? "Log in" : "Create"}
+              {busy ? "Please wait…" : isReset ? "Reset password" : mode === "login" ? "Log in" : "Create"}
             </button>
 
             <button
@@ -204,10 +288,16 @@ function LoginInner() {
             You’ll be redirected to: <strong>{next}</strong>
           </p>
 
-          <p style={{ marginTop: "0.6rem", opacity: 0.7, lineHeight: 1.35 }}>
-            Important: characters are saved on the server under your username. Use the same username/password on any device
-            to load the same character.
-          </p>
+          {!isReset ? (
+            <p style={{ marginTop: "0.6rem", opacity: 0.7, lineHeight: 1.35 }}>
+              Important: characters are saved on the server under your username. Use the same username/password on any
+              device to load the same character.
+            </p>
+          ) : (
+            <p style={{ marginTop: "0.6rem", opacity: 0.7, lineHeight: 1.35 }}>
+              After resetting, you’ll be logged in automatically and taken to your character.
+            </p>
+          )}
         </section>
       </div>
     </main>
