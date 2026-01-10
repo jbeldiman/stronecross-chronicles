@@ -76,7 +76,10 @@ async function fetchNPCs(room: string): Promise<NPCState | null> {
   return json.data ?? null;
 }
 
-async function upsertNPC(room: string, npc: Partial<NPC> & { name: string; title: string; townId: TownId }): Promise<NPCState | null> {
+async function upsertNPC(
+  room: string,
+  npc: Partial<NPC> & { name: string; title: string; townId: TownId }
+): Promise<NPCState | null> {
   const res = await fetch(`/api/npcs?room=${encodeURIComponent(room)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -98,6 +101,24 @@ async function deleteNPC(room: string, id: string): Promise<NPCState | null> {
   return json.data ?? null;
 }
 
+/**
+ * Step 1/2 you said you already did should have created this endpoint.
+ * Expected response: { token: string } (and optionally { expiresAt }).
+ * The DM header is still passed so you can authorize it server-side.
+ */
+async function createPasswordResetToken(actor: string, username: string) {
+  const res = await fetch("/api/auth/reset/request", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-sc-user": actor,
+    },
+    body: JSON.stringify({ username }),
+  });
+  const json = (await res.json().catch(() => ({}))) as any;
+  return { ok: res.ok, status: res.status, json };
+}
+
 export default function DmPage() {
   const router = useRouter();
   const [session, setSession] = useState<Session | null>(null);
@@ -109,7 +130,6 @@ export default function DmPage() {
   const [sheet, setSheet] = useState<any>(null);
   const [error, setError] = useState<string>("");
 
-
   const [npcState, setNpcState] = useState<NPCState>({ npcs: [], lastUpdatedAt: "" });
   const lastNpcStamp = useRef<string>("");
 
@@ -119,12 +139,16 @@ export default function DmPage() {
   const [npcComments, setNpcComments] = useState("");
   const [npcBusy, setNpcBusy] = useState(false);
 
+  // Password reset UX state
+  const [resetBusyUser, setResetBusyUser] = useState<string>("");
+  const [resetLink, setResetLink] = useState<string>("");
+  const [resetForUser, setResetForUser] = useState<string>("");
+
   const isDm = session?.username === DM_USERNAME;
 
   useEffect(() => {
     const s = loadSession();
     if (!s) {
-     
       const r = typeof window !== "undefined" ? getRoomFromUrl() : "default";
       router.replace(`/login?next=/dm?room=${encodeURIComponent(r)}`);
       return;
@@ -219,7 +243,15 @@ export default function DmPage() {
       <div className="sc-bg" style={{ backgroundImage: "url('/backgrounds/character.jpg')" }} />
       <div className="sc-overlay" />
       <div className="sc-content" style={{ padding: "2rem" }}>
-        <header style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "baseline", flexWrap: "wrap" }}>
+        <header
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            gap: "1rem",
+            alignItems: "baseline",
+            flexWrap: "wrap",
+          }}
+        >
           <div>
             <h1 style={{ marginBottom: "0.25rem" }}>DM</h1>
             <p style={{ opacity: 0.85, margin: 0 }}>
@@ -264,6 +296,126 @@ export default function DmPage() {
           </div>
         ) : null}
 
+        {/* Password Reset */}
+        <section style={{ ...card, marginTop: "1rem" }}>
+          <h2 style={h2}>Password Reset</h2>
+          <p style={{ opacity: 0.85, marginTop: "-0.25rem" }}>
+            Generate a one-time reset link for a player. They’ll set a new password without losing their character.
+          </p>
+
+          <div style={{ display: "grid", gap: "0.5rem", marginTop: "0.75rem" }}>
+            {users.length ? (
+              users.map((u) => (
+                <div
+                  key={`reset-${u}`}
+                  style={{
+                    display: "flex",
+                    gap: "0.5rem",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "0.65rem 0.75rem",
+                    borderRadius: 12,
+                    border: "1px solid rgba(255,255,255,0.12)",
+                    background: "rgba(0,0,0,0.25)",
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <strong style={{ color: "white" }}>{u}</strong>
+                    <div style={{ opacity: 0.7, fontSize: "0.9rem" }}>
+                      Creates a reset link for <span style={{ opacity: 0.9 }}>{u}</span>
+                    </div>
+                  </div>
+
+                  <button
+                    style={{
+                      ...btn,
+                      padding: "0.55rem 0.8rem",
+                      background: "rgba(212,175,55,0.12)",
+                      whiteSpace: "nowrap",
+                    }}
+                    disabled={!!resetBusyUser}
+                    onClick={async () => {
+                      if (!confirm(`Create a password reset link for "${u}"?`)) return;
+                      try {
+                        setError("");
+                        setResetLink("");
+                        setResetForUser("");
+                        setResetBusyUser(u);
+
+                        const out = await createPasswordResetToken(session.username, u);
+                        if (!out.ok) {
+                          if (out.status === 403) throw new Error("Not authorized to create reset links.");
+                          throw new Error(out.json?.error || "Failed to create reset link.");
+                        }
+
+                        const token = String(out.json?.token || "").trim();
+                        if (!token) throw new Error("Reset token missing from server response.");
+
+                        const origin = window.location.origin;
+                        const link = `${origin}/login?next=${encodeURIComponent(
+                          "/character"
+                        )}&reset=${encodeURIComponent(token)}&user=${encodeURIComponent(u)}`;
+
+                        setResetForUser(u);
+                        setResetLink(link);
+
+                        try {
+                          await navigator.clipboard.writeText(link);
+                        } catch {
+                          // Clipboard can fail depending on browser/permissions; we still show link.
+                        }
+                      } catch (e: any) {
+                        setError(e?.message || "Failed to create reset link.");
+                      } finally {
+                        setResetBusyUser("");
+                      }
+                    }}
+                  >
+                    {resetBusyUser === u ? "Generating..." : "Create reset link"}
+                  </button>
+                </div>
+              ))
+            ) : (
+              <p style={{ opacity: 0.8, marginTop: "0.5rem" }}>No players registered yet.</p>
+            )}
+          </div>
+
+          {resetLink ? (
+            <div style={{ marginTop: "0.75rem" }}>
+              <div style={{ ...label, marginBottom: "0.35rem" }}>
+                Reset link for <strong>{resetForUser}</strong>
+              </div>
+
+              <div style={{ display: "flex", gap: "0.5rem", alignItems: "stretch", flexWrap: "wrap" }}>
+                <input value={resetLink} readOnly style={{ ...input, flex: 1, minWidth: 260 }} />
+                <button
+                  style={btn}
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(resetLink);
+                    } catch {}
+                  }}
+                >
+                  Copy
+                </button>
+                <button
+                  style={{ ...btn, background: "rgba(255,255,255,0.06)" }}
+                  onClick={() => {
+                    setResetLink("");
+                    setResetForUser("");
+                  }}
+                >
+                  Clear
+                </button>
+              </div>
+
+              <p style={{ opacity: 0.75, marginTop: "0.5rem", lineHeight: 1.35 }}>
+                Send this link to the player. Once they set a new password, they can log in normally going forward.
+              </p>
+            </div>
+          ) : null}
+        </section>
+
         {/* NPC Manager */}
         <section style={{ ...card, marginTop: "1rem" }}>
           <h2 style={h2}>NPC Manager</h2>
@@ -274,12 +426,7 @@ export default function DmPage() {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem", marginTop: "0.75rem" }}>
             <div>
               <label style={label}>Name</label>
-              <input
-                value={npcName}
-                onChange={(e) => setNpcName(e.target.value)}
-                placeholder="Captain Varr"
-                style={input}
-              />
+              <input value={npcName} onChange={(e) => setNpcName(e.target.value)} placeholder="Captain Varr" style={input} />
             </div>
 
             <div>
@@ -418,7 +565,12 @@ export default function DmPage() {
                             setNpcBusy(false);
                           }
                         }}
-                        style={{ ...btn, padding: "0.45rem 0.65rem", borderRadius: 12, background: "rgba(255,80,80,0.10)" }}
+                        style={{
+                          ...btn,
+                          padding: "0.45rem 0.65rem",
+                          borderRadius: 12,
+                          background: "rgba(255,80,80,0.10)",
+                        }}
                         disabled={npcBusy}
                         title="Remove NPC from this room"
                       >
