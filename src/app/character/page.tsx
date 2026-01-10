@@ -88,10 +88,18 @@ type Spell = {
 
 const SPELLS = spellsData as Spell[];
 
+type ClassLevel = {
+  name: string;
+  level: number;
+};
+
 type CharacterSheet = {
   name: string;
+
   className: string;
   level: number;
+
+  classes: ClassLevel[];
 
   experience: number;
 
@@ -99,6 +107,8 @@ type CharacterSheet = {
   savingThrowProficiencies: Partial<Record<Ability, boolean>>;
   skillProficiencies: Partial<Record<SkillKey, boolean>>;
   skillExpertise: Partial<Record<SkillKey, boolean>>;
+
+  skillHalfExpertise: Partial<Record<SkillKey, boolean>>;
 
   maxHp: number;
   currentHp: number;
@@ -186,11 +196,55 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function sanitizeClasses(input: unknown, fallbackName: string, fallbackLevel: number): { classes: ClassLevel[]; total: number; className: string } {
+  let classes: ClassLevel[] = [];
+
+  if (Array.isArray(input)) {
+    classes = input
+      .filter(isRecord)
+      .map((c) => {
+        const name = typeof c.name === "string" ? c.name.trim() : "";
+        const level = Number.isFinite(Number(c.level)) ? clamp(Number(c.level), 0, 20) : 0;
+        return { name: name || "Class", level };
+      })
+      .filter((c) => c.name.trim().length > 0);
+  }
+
+  if (!classes.length) {
+    classes = [{ name: (fallbackName || "Class").trim() || "Class", level: clamp(Number(fallbackLevel || 1), 1, 20) }];
+  }
+
+  const sum = classes.reduce((a, b) => a + (Number.isFinite(b.level) ? b.level : 0), 0);
+  if (sum <= 0) classes[0] = { ...classes[0], level: 1 };
+
+  let total = classes.reduce((a, b) => a + b.level, 0);
+  if (total > 20) {
+    let overflow = total - 20;
+    for (let i = classes.length - 1; i >= 0 && overflow > 0; i--) {
+      const take = Math.min(overflow, classes[i].level);
+      classes[i] = { ...classes[i], level: classes[i].level - take };
+      overflow -= take;
+    }
+    const postSum = classes.reduce((a, b) => a + b.level, 0);
+    if (postSum <= 0) classes[0] = { ...classes[0], level: 1 };
+  }
+
+  classes = classes.filter((c) => c.level > 0);
+  if (!classes.length) classes = [{ name: (fallbackName || "Class").trim() || "Class", level: 1 }];
+
+  total = clamp(classes.reduce((a, b) => a + b.level, 0), 1, 20);
+  const className = (classes[0]?.name || fallbackName || "Class").trim() || "Class";
+
+  return { classes, total, className };
+}
+
 function defaultSheet(): CharacterSheet {
   return {
     name: "Unnamed Hero",
+
     className: "Fighter",
     level: 1,
+    classes: [{ name: "Fighter", level: 1 }],
 
     experience: 0,
 
@@ -198,6 +252,7 @@ function defaultSheet(): CharacterSheet {
     savingThrowProficiencies: {},
     skillProficiencies: {},
     skillExpertise: {},
+    skillHalfExpertise: {},
 
     maxHp: 10,
     currentHp: 10,
@@ -231,14 +286,21 @@ function normalizeSheet(raw: unknown): CharacterSheet {
   const base = defaultSheet();
   const r = isRecord(raw) ? raw : {};
 
+  const legacyClassName = typeof r.className === "string" ? r.className : base.className;
+  const legacyLevel = clamp(Number(r.level ?? base.level), 1, 20);
+
+  const { classes, total, className } = sanitizeClasses((r as any).classes, legacyClassName, legacyLevel);
+
   const merged: CharacterSheet = {
     ...base,
     ...r,
 
     name: typeof r.name === "string" ? r.name : base.name,
-    className: typeof r.className === "string" ? r.className : base.className,
 
-    level: clamp(Number(r.level ?? base.level), 1, 20),
+    className,
+    level: total,
+    classes,
+
     experience: clamp(Number(r.experience ?? base.experience), 0, XP_FOR_LEVEL[20]),
 
     abilities: {
@@ -255,6 +317,10 @@ function normalizeSheet(raw: unknown): CharacterSheet {
       : {}) as CharacterSheet["skillProficiencies"],
 
     skillExpertise: (isRecord(r.skillExpertise) ? (r.skillExpertise as Record<string, unknown>) : {}) as CharacterSheet["skillExpertise"],
+
+    skillHalfExpertise: (isRecord((r as any).skillHalfExpertise)
+      ? ((r as any).skillHalfExpertise as Record<string, unknown>)
+      : {}) as CharacterSheet["skillHalfExpertise"],
 
     maxHp: Number.isFinite(Number(r.maxHp)) ? clamp(Number(r.maxHp), 1, 999) : base.maxHp,
     currentHp: Number.isFinite(Number(r.currentHp)) ? clamp(Number(r.currentHp), 0, 999) : base.currentHp,
@@ -323,10 +389,16 @@ function normalizeSheet(raw: unknown): CharacterSheet {
   merged.className = merged.className || base.className;
 
   const cleanedExpertise: Partial<Record<SkillKey, boolean>> = { ...(merged.skillExpertise ?? {}) };
+  const cleanedHalf: Partial<Record<SkillKey, boolean>> = { ...(merged.skillHalfExpertise ?? {}) };
+
   for (const sk of SKILLS) {
     if (!merged.skillProficiencies[sk.key] && cleanedExpertise[sk.key]) cleanedExpertise[sk.key] = false;
+
+    if (merged.skillProficiencies[sk.key] && cleanedHalf[sk.key]) cleanedHalf[sk.key] = false;
   }
+
   merged.skillExpertise = cleanedExpertise;
+  merged.skillHalfExpertise = cleanedHalf;
 
   return merged;
 }
@@ -447,6 +519,8 @@ export default function CharacterPage() {
   const leveledSpells = useMemo(() => SPELLS.filter((s) => s.level > 0), []);
 
   const proficiencyBonus = profBonusForLevel(sheet.level);
+  const halfProfBonus = Math.floor(proficiencyBonus / 2);
+
   const nextXp = nextLevelXp(sheet.level);
   const xpToNext = nextXp === null ? 0 : Math.max(0, nextXp - sheet.experience);
 
@@ -477,6 +551,11 @@ export default function CharacterPage() {
     setSheet((prev) => ({ ...prev, ...partial }));
   }
 
+  function updateClasses(nextClasses: ClassLevel[]) {
+    const { classes, total, className } = sanitizeClasses(nextClasses, sheet.className, sheet.level);
+    patch({ classes, level: total, className });
+  }
+
   function ensureSpellExists(id: string) {
     return spellsById.has(id);
   }
@@ -499,11 +578,21 @@ export default function CharacterPage() {
     return !!sheet.skillExpertise[k] && !!sheet.skillProficiencies[k];
   }
 
+  function isSkillHalf(k: SkillKey) {
+    return !!sheet.skillHalfExpertise[k] && !sheet.skillProficiencies[k];
+  }
+
   function skillTotal(k: SkillKey, ability: Ability) {
     const mod = abilityMod(sheet.abilities[ability]);
     const mult = isSkillExpert(k) ? 2 : isSkillProficient(k) ? 1 : 0;
-    return mod + proficiencyBonus * mult;
+    const half = isSkillHalf(k) ? halfProfBonus : 0;
+    return mod + proficiencyBonus * mult + half;
   }
+
+  const classDisplay = useMemo(() => {
+    const parts = (sheet.classes || []).map((c) => `${c.name} ${c.level}`);
+    return parts.length ? parts.join(" / ") : sheet.className;
+  }, [sheet.classes, sheet.className]);
 
   if (!session) {
     return (
@@ -573,17 +662,61 @@ export default function CharacterPage() {
               <input value={sheet.name} onChange={(e) => update("name", e.target.value)} style={inputStyle} />
             </Field>
 
-            <Field label="Class">
-              <input value={sheet.className} onChange={(e) => update("className", e.target.value)} style={inputStyle} />
+            <Field label="Classes">
+              <div style={{ border: "1px solid #222", borderRadius: 12, padding: "0.6rem 0.7rem", background: "rgba(0,0,0,0.25)" }}>
+                <div style={{ fontSize: "0.9rem", opacity: 0.9, marginBottom: "0.5rem" }}>
+                  <strong>{classDisplay}</strong>
+                </div>
+
+                <div style={{ display: "grid", gap: "0.5rem" }}>
+                  {(sheet.classes || []).map((c, idx) => (
+                    <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 90px auto", gap: "0.5rem" }}>
+                      <input
+                        value={c.name}
+                        onChange={(e) => {
+                          const next = [...sheet.classes];
+                          next[idx] = { ...c, name: e.target.value };
+                          updateClasses(next);
+                        }}
+                        style={inputStyle}
+                        placeholder="Class"
+                      />
+                      <input
+                        type="number"
+                        value={c.level}
+                        onChange={(e) => {
+                          const next = [...sheet.classes];
+                          next[idx] = { ...c, level: clamp(Number(e.target.value), 0, 20) };
+                          updateClasses(next);
+                        }}
+                        style={inputStyle}
+                        title="Class level"
+                      />
+                      <button
+                        onClick={() => {
+                          const next = sheet.classes.filter((_, i) => i !== idx);
+                          updateClasses(next);
+                        }}
+                        style={{ ...linkBtnStyle, alignSelf: "center" }}
+                        title="Remove class"
+                      >
+                        remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <button
+                  onClick={() => updateClasses([...(sheet.classes || []), { name: "New Class", level: 1 }])}
+                  style={{ ...btnStyle, marginTop: "0.5rem" }}
+                >
+                  + Add Class
+                </button>
+              </div>
             </Field>
 
-            <Field label="Level">
-              <input
-                type="number"
-                value={sheet.level}
-                onChange={(e) => update("level", clamp(Number(e.target.value), 1, 20))}
-                style={inputStyle}
-              />
+            <Field label="Total Level">
+              <input value={String(sheet.level)} readOnly style={{ ...inputStyle, opacity: 0.9 }} />
             </Field>
 
             <Field label="Experience">
@@ -728,7 +861,8 @@ export default function CharacterPage() {
             </div>
 
             <p style={{ marginTop: "0.75rem", opacity: 0.9 }}>
-              Calculated AC: <strong>{calculatedAc}</strong> <span style={{ opacity: 0.8 }}>(base + armor bonus + dex contribution)</span>
+              Calculated AC: <strong>{calculatedAc}</strong>{" "}
+              <span style={{ opacity: 0.8 }}>(base + armor bonus + dex contribution)</span>
             </p>
           </section>
         </div>
@@ -738,7 +872,7 @@ export default function CharacterPage() {
             <h2 style={h2}>Skills</h2>
 
             <div style={{ opacity: 0.8, fontSize: "0.9rem", marginBottom: "0.75rem" }}>
-              Proficient adds PB. Expertise adds <strong>2×</strong> PB (and requires proficiency).
+              Proficient adds PB. Expertise adds <strong>2×</strong> PB (requires proficiency). Half adds <strong>⌊PB/2⌋</strong> only when not proficient.
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
@@ -746,6 +880,7 @@ export default function CharacterPage() {
                 const total = skillTotal(s.key, s.ability);
                 const prof = isSkillProficient(s.key);
                 const exp = isSkillExpert(s.key);
+                const half = isSkillHalf(s.key);
 
                 return (
                   <div
@@ -768,8 +903,15 @@ export default function CharacterPage() {
                             const checked = e.target.checked;
                             const nextProf = { ...sheet.skillProficiencies, [s.key]: checked };
                             const nextExp = { ...sheet.skillExpertise };
-                            if (!checked) nextExp[s.key] = false;
-                            patch({ skillProficiencies: nextProf, skillExpertise: nextExp });
+                            const nextHalf = { ...sheet.skillHalfExpertise };
+
+                            if (!checked) {
+                              nextExp[s.key] = false;
+                            } else {
+                              nextHalf[s.key] = false;
+                            }
+
+                            patch({ skillProficiencies: nextProf, skillExpertise: nextExp, skillHalfExpertise: nextHalf });
                           }}
                         />
                         <span>
@@ -788,6 +930,19 @@ export default function CharacterPage() {
                           }}
                         />
                         <span style={{ fontSize: "0.9rem" }}>Expertise</span>
+                      </label>
+
+                      <label style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", opacity: !prof ? 1 : 0.45 }}>
+                        <input
+                          type="checkbox"
+                          checked={half}
+                          disabled={prof}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            patch({ skillHalfExpertise: { ...sheet.skillHalfExpertise, [s.key]: checked } });
+                          }}
+                        />
+                        <span style={{ fontSize: "0.9rem" }}>Half</span>
                       </label>
                     </div>
 
