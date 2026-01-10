@@ -105,6 +105,10 @@ async function pushRemote(room: string, state: EncounterState): Promise<void> {
   });
 }
 
+function isSecretStats(kind: CombatantType) {
+  return kind === "NPC" || kind === "Monster";
+}
+
 export default function CombatPage() {
   const [isClient, setIsClient] = useState(false);
   const [role, setRole] = useState<"dm" | "player">("player");
@@ -324,6 +328,9 @@ export default function CombatPage() {
     );
   }
 
+  const canSeeMonsterStats = (c: Combatant) => isDm || !isSecretStats(c.kind);
+  const canEditActive = (c: Combatant) => isDm;
+
   return (
     <main className="sc-page">
       <div className="sc-bg" style={{ backgroundImage: "url('/backgrounds/character.jpg')" }} />
@@ -459,7 +466,7 @@ export default function CombatPage() {
                     <div style={{ fontSize: "1.35rem", fontWeight: 800 }}>{active.name}</div>
                     <div style={{ opacity: 0.85, marginTop: "0.15rem" }}>
                       <strong>{active.kind}</strong> • Init <strong>{active.initiative}</strong>
-                      {typeof active.ac === "number" ? (
+                      {canSeeMonsterStats(active) && typeof active.ac === "number" ? (
                         <>
                           {" "}
                           • AC <strong>{active.ac}</strong>
@@ -477,15 +484,21 @@ export default function CombatPage() {
                   <div style={{ ...subCard, padding: "0.75rem" }}>
                     <div style={{ opacity: 0.8, fontSize: "0.9rem" }}>HP</div>
                     <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginTop: "0.35rem", flexWrap: "wrap" }}>
-                      <HpPill c={active} />
-                      {isDm ? <HpAdjust c={active} onChange={(nextHp) => updateCombatant(active.id, { hp: nextHp })} /> : null}
-                      <button
-                        style={ghostBtnSmall}
-                        onClick={() => updateCombatant(active.id, { hp: active.maxHp ?? active.hp })}
-                        disabled={!isDm || typeof active.maxHp !== "number"}
-                      >
-                        Full
-                      </button>
+                      {canSeeMonsterStats(active) ? (
+                        <>
+                          <HpPill c={active} />
+                          {isDm ? <HpAdjust c={active} onChange={(nextHp) => updateCombatant(active.id, { hp: nextHp })} /> : null}
+                          <button
+                            style={ghostBtnSmall}
+                            onClick={() => updateCombatant(active.id, { hp: active.maxHp ?? active.hp })}
+                            disabled={!isDm || typeof active.maxHp !== "number"}
+                          >
+                            Full
+                          </button>
+                        </>
+                      ) : (
+                        <span style={{ opacity: 0.7 }}>—</span>
+                      )}
                     </div>
                   </div>
 
@@ -502,7 +515,7 @@ export default function CombatPage() {
                               })
                             }
                             style={condPill}
-                            disabled={!isDm}
+                            disabled={!canEditActive(active)}
                           >
                             {cnd}
                           </button>
@@ -560,6 +573,10 @@ export default function CombatPage() {
             {ordered.length ? (
               ordered.map((c, idx) => {
                 const isActive = active?.id === c.id;
+
+                const showSecretStats = canSeeMonsterStats(c); // DM OR it's a PC
+                const showOnlyPublicForSecrets = !showSecretStats; // player looking at NPC/Monster
+
                 return (
                   <div key={c.id} style={{ ...row, borderColor: isActive ? "#d4af37" : "#222" }}>
                     <button
@@ -581,27 +598,36 @@ export default function CombatPage() {
                         <span style={{ fontWeight: 800, fontSize: "1.05rem" }}>{c.name}</span>
                         <span style={{ opacity: 0.85 }}>{c.kind}</span>
                       </div>
+
                       <div style={{ opacity: 0.8, marginTop: "0.2rem" }}>
                         Init <strong>{c.initiative}</strong>
-                        {typeof c.ac === "number" ? (
+
+                        {/* Players can see AC/HP for PCs only; DM can see all */}
+                        {showSecretStats && typeof c.ac === "number" ? (
                           <>
                             {" "}
                             • AC <strong>{c.ac}</strong>
                           </>
                         ) : null}
-                        {typeof c.hp === "number" ? (
+
+                        {showSecretStats && typeof c.hp === "number" ? (
                           <>
                             {" "}
                             • HP <strong>{c.hp}</strong>
                             {typeof c.maxHp === "number" ? `/${c.maxHp}` : ""}
                           </>
                         ) : null}
+
+                        {/* Everyone can see conditions for everyone */}
                         {c.conditions.length ? (
                           <>
                             {" "}
                             • <span style={{ color: "#ffdf9a" }}>{c.conditions.join(", ")}</span>
                           </>
                         ) : null}
+
+                        {/* If it's a secret-stats creature and player is viewing, ensure we don't leak notes via future UI */}
+                        {showOnlyPublicForSecrets ? null : null}
                       </div>
                     </button>
 
