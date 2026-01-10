@@ -21,6 +21,7 @@ export default function RootLayout({
             <a href="/login">Login</a>
             <a href="/character">Character</a>
             <a href="/map">Map</a>
+            <a href="/old-gods">The Old Gods</a>
             <a href="/combat">Combat</a>
             <a href="/dm">DM</a>
           </nav>
