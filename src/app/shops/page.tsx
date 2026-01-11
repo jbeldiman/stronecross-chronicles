@@ -105,9 +105,12 @@ export default function ShopsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+ 
   const [expandedCities, setExpandedCities] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(CITIES.map((c) => [c, true]))
   );
+  const [expandedShops, setExpandedShops] = useState<Record<string, boolean>>({});
 
   const isDM = useMemo(() => sessionUsername === DM_USERNAME, [sessionUsername]);
 
@@ -154,6 +157,21 @@ export default function ShopsPage() {
     return m;
   }, [visibleShops]);
 
+ 
+  useEffect(() => {
+    setExpandedShops((prev) => {
+      const next = { ...prev };
+      for (const s of visibleShops) {
+        if (next[s.id] === undefined) next[s.id] = false; 
+      }
+      
+      for (const key of Object.keys(next)) {
+        if (!visibleShops.some((s) => s.id === key)) delete next[key];
+      }
+      return next;
+    });
+  }, [visibleShops]);
+
   function updateShop(id: string, patch: Partial<Shop>) {
     setState((prev) => ({
       ...prev,
@@ -176,6 +194,7 @@ export default function ShopsPage() {
       updatedAt: new Date().toISOString(),
       shops: [next, ...prev.shops],
     }));
+    setExpandedShops((prev) => ({ ...prev, [next.id]: true }));
   }
 
   function removeShop(id: string) {
@@ -184,6 +203,11 @@ export default function ShopsPage() {
       updatedAt: new Date().toISOString(),
       shops: prev.shops.filter((s) => s.id !== id),
     }));
+    setExpandedShops((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   }
 
   function addItem(shopId: string) {
@@ -193,6 +217,7 @@ export default function ShopsPage() {
       updatedAt: new Date().toISOString(),
       shops: prev.shops.map((s) => (s.id === shopId ? { ...s, inventory: [item, ...(s.inventory || [])] } : s)),
     }));
+    setExpandedShops((prev) => ({ ...prev, [shopId]: true }));
   }
 
   function updateItem(shopId: string, itemId: string, patch: Partial<ShopItem>) {
@@ -229,7 +254,11 @@ export default function ShopsPage() {
     setExpandedCities((prev) => ({ ...prev, [city]: !prev[city] }));
   }
 
-  // --- styles (cleaner, less noisy) ---
+  function toggleShop(shopId: string) {
+    setExpandedShops((prev) => ({ ...prev, [shopId]: !prev[shopId] }));
+  }
+
+  // --- styles ---
   const wrap: React.CSSProperties = { maxWidth: 1050, margin: "0 auto" };
 
   const headerRow: React.CSSProperties = {
@@ -245,6 +274,15 @@ export default function ShopsPage() {
     borderRadius: 10,
     border: "1px solid #2a2a2a",
     background: "#111",
+    color: "#fff",
+    cursor: "pointer",
+  };
+
+  const ghostButton: React.CSSProperties = {
+    padding: "0.45rem 0.65rem",
+    borderRadius: 10,
+    border: "1px solid #222",
+    background: "rgba(255,255,255,0.03)",
     color: "#fff",
     cursor: "pointer",
   };
@@ -286,11 +324,25 @@ export default function ShopsPage() {
     borderBottom: "1px solid #1d1d1d",
   };
 
-  const shopCard: React.CSSProperties = {
+  const shopShell: React.CSSProperties = {
     border: "1px solid #1f1f1f",
     borderRadius: 14,
-    padding: "1rem",
     background: "#0d0d0d",
+    overflow: "hidden",
+  };
+
+  const shopHeader: React.CSSProperties = {
+    padding: "0.9rem 1rem",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: "1rem",
+    background: "rgba(255,255,255,0.02)",
+    borderBottom: "1px solid #151515",
+  };
+
+  const shopBody: React.CSSProperties = {
+    padding: "1rem",
   };
 
   const table: React.CSSProperties = {
@@ -344,7 +396,7 @@ export default function ShopsPage() {
       <div style={{ display: "grid", gap: "1rem" }}>
         {CITIES.map((city) => {
           const shops = shopsByCity.get(city) || [];
-          const expanded = isDM ? !!expandedCities[city] : true; 
+          const expandedCity = !!expandedCities[city];
 
           if (!isDM && shops.length === 0) return null;
 
@@ -352,14 +404,14 @@ export default function ShopsPage() {
             <div key={city} style={cityBlock}>
               <div style={cityHeader}>
                 <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                  {isDM ? (
-                    <button style={button} onClick={() => toggleCity(city)}>
-                      {expanded ? "Hide" : "Show"}
-                    </button>
-                  ) : null}
+                  <button style={ghostButton} onClick={() => toggleCity(city)}>
+                    {expandedCity ? "▾" : "▸"}
+                  </button>
 
                   <div style={{ fontSize: 18, fontWeight: 800 }}>{city}</div>
-                  <div style={pill}>{shops.length} shop{shops.length === 1 ? "" : "s"}</div>
+                  <div style={pill}>
+                    {shops.length} shop{shops.length === 1 ? "" : "s"}
+                  </div>
                 </div>
 
                 {isDM ? (
@@ -369,166 +421,189 @@ export default function ShopsPage() {
                 ) : null}
               </div>
 
-              {expanded ? (
-                <div style={{ padding: "1rem", display: "grid", gap: "1rem" }}>
+              {expandedCity ? (
+                <div style={{ padding: "1rem", display: "grid", gap: "0.85rem" }}>
                   {shops.length === 0 ? <div style={{ opacity: 0.8 }}>No shops here yet.</div> : null}
 
-                  {shops.map((s) => (
-                    <div key={s.id} style={shopCard}>
-                      {/* Title row */}
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "1rem" }}>
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: 18, fontWeight: 900, lineHeight: 1.1 }}>{s.name || "Unnamed Shop"}</div>
-                          {s.description ? (
-                            <div style={{ opacity: 0.75, marginTop: 6, whiteSpace: "pre-wrap" }}>{s.description}</div>
+                  {shops.map((s) => {
+                    const expandedShop = !!expandedShops[s.id];
+
+                    return (
+                      <div key={s.id} style={shopShell}>
+                        {/* Shop dropdown header */}
+                        <div style={shopHeader}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", minWidth: 0 }}>
+                            <button style={ghostButton} onClick={() => toggleShop(s.id)}>
+                              {expandedShop ? "▾" : "▸"}
+                            </button>
+
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: 16, fontWeight: 900, lineHeight: 1.1 }}>
+                                {s.name || "Unnamed Shop"}
+                              </div>
+                              {s.description ? (
+                                <div style={{ opacity: 0.7, marginTop: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                  {s.description}
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+
+                          {isDM ? (
+                            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                              <label style={{ display: "flex", alignItems: "center", gap: "0.45rem", cursor: "pointer" }}>
+                                <input
+                                  type="checkbox"
+                                  checked={!!s.visibleToPlayers}
+                                  onChange={(e) => updateShop(s.id, { visibleToPlayers: e.target.checked })}
+                                />
+                                <span style={{ opacity: 0.85, fontSize: 13 }}>Visible</span>
+                              </label>
+
+                              <button style={button} onClick={() => addItem(s.id)} disabled={saving}>
+                                + Item
+                              </button>
+                              <button style={button} onClick={() => removeShop(s.id)} disabled={saving}>
+                                Remove
+                              </button>
+                            </div>
                           ) : null}
                         </div>
 
-                        {isDM ? (
-                          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-                            <label style={{ display: "flex", alignItems: "center", gap: "0.45rem", cursor: "pointer" }}>
-                              <input
-                                type="checkbox"
-                                checked={!!s.visibleToPlayers}
-                                onChange={(e) => updateShop(s.id, { visibleToPlayers: e.target.checked })}
-                              />
-                              <span style={{ opacity: 0.85, fontSize: 13 }}>Visible</span>
-                            </label>
+                        {/* Shop body */}
+                        {expandedShop ? (
+                          <div style={shopBody}>
+                            {s.description ? (
+                              <div style={{ opacity: 0.8, whiteSpace: "pre-wrap", marginBottom: 10 }}>{s.description}</div>
+                            ) : null}
 
-                            <button style={button} onClick={() => addItem(s.id)} disabled={saving}>
-                              + Item
-                            </button>
-                            <button style={button} onClick={() => removeShop(s.id)} disabled={saving}>
-                              Remove
-                            </button>
+                            {/* DM edit fields */}
+                            {isDM ? (
+                              <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 220px", gap: "0.75rem" }}>
+                                <div>
+                                  <div style={label}>Shop Name</div>
+                                  <input
+                                    style={input}
+                                    value={s.name}
+                                    onChange={(e) => updateShop(s.id, { name: e.target.value })}
+                                  />
+                                </div>
+
+                                <div>
+                                  <div style={label}>City</div>
+                                  <select
+                                    style={input}
+                                    value={s.city}
+                                    onChange={(e) => updateShop(s.id, { city: e.target.value as CityName })}
+                                  >
+                                    {CITIES.map((c) => (
+                                      <option key={c} value={c}>
+                                        {c}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+
+                                <div style={{ gridColumn: "1 / -1" }}>
+                                  <div style={label}>Description</div>
+                                  <textarea
+                                    style={{ ...input, minHeight: 70 }}
+                                    value={s.description}
+                                    onChange={(e) => updateShop(s.id, { description: e.target.value })}
+                                  />
+                                </div>
+                              </div>
+                            ) : null}
+
+                            {/* Inventory */}
+                            {(s.inventory || []).length > 0 ? (
+                              <table style={table}>
+                                <thead>
+                                  <tr>
+                                    <th style={th}>Item</th>
+                                    <th style={{ ...th, width: 90 }}>Qty</th>
+                                    <th style={{ ...th, width: 120 }}>Price</th>
+                                    {isDM ? <th style={{ ...th, width: 120 }} /> : null}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {(s.inventory || []).map((it) => (
+                                    <tr key={it.id}>
+                                      <td style={td}>
+                                        {isDM ? (
+                                          <>
+                                            <input
+                                              style={input}
+                                              value={it.name}
+                                              onChange={(e) => updateItem(s.id, it.id, { name: e.target.value })}
+                                            />
+                                            <div style={{ marginTop: 8 }}>
+                                              <div style={label}>Notes</div>
+                                              <textarea
+                                                style={{ ...input, minHeight: 60 }}
+                                                value={it.notes}
+                                                onChange={(e) => updateItem(s.id, it.id, { notes: e.target.value })}
+                                              />
+                                            </div>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <div style={{ fontWeight: 700 }}>{it.name || "—"}</div>
+                                            {it.notes ? (
+                                              <div style={{ opacity: 0.75, marginTop: 4, whiteSpace: "pre-wrap" }}>{it.notes}</div>
+                                            ) : null}
+                                          </>
+                                        )}
+                                      </td>
+
+                                      <td style={td}>
+                                        {isDM ? (
+                                          <input
+                                            style={input}
+                                            type="number"
+                                            value={Number.isFinite(it.qty) ? it.qty : 0}
+                                            onChange={(e) => updateItem(s.id, it.id, { qty: Number(e.target.value) })}
+                                          />
+                                        ) : (
+                                          <div>{it.qty}</div>
+                                        )}
+                                      </td>
+
+                                      <td style={td}>
+                                        {isDM ? (
+                                          <input
+                                            style={input}
+                                            type="number"
+                                            step="0.01"
+                                            value={Number.isFinite(it.priceGp) ? it.priceGp : 0}
+                                            onChange={(e) => updateItem(s.id, it.id, { priceGp: Number(e.target.value) })}
+                                          />
+                                        ) : (
+                                          <div>{formatGp(it.priceGp)}</div>
+                                        )}
+                                      </td>
+
+                                      {isDM ? (
+                                        <td style={td}>
+                                          <button style={button} onClick={() => removeItem(s.id, it.id)} disabled={saving}>
+                                            Remove
+                                          </button>
+                                        </td>
+                                      ) : null}
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            ) : (
+                              <div style={{ marginTop: 10, opacity: 0.75 }}>
+                                {isDM ? "No items yet. Click “+ Item” to add inventory." : "No inventory listed."}
+                              </div>
+                            )}
                           </div>
                         ) : null}
                       </div>
-
-                      {/* DM edit fields */}
-                      {isDM ? (
-                        <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 220px", gap: "0.75rem" }}>
-                          <div>
-                            <div style={label}>Shop Name</div>
-                            <input
-                              style={input}
-                              value={s.name}
-                              onChange={(e) => updateShop(s.id, { name: e.target.value })}
-                            />
-                          </div>
-
-                          <div>
-                            <div style={label}>City</div>
-                            <select
-                              style={input}
-                              value={s.city}
-                              onChange={(e) => updateShop(s.id, { city: e.target.value as CityName })}
-                            >
-                              {CITIES.map((c) => (
-                                <option key={c} value={c}>
-                                  {c}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-
-                          <div style={{ gridColumn: "1 / -1" }}>
-                            <div style={label}>Description</div>
-                            <textarea
-                              style={{ ...input, minHeight: 70 }}
-                              value={s.description}
-                              onChange={(e) => updateShop(s.id, { description: e.target.value })}
-                            />
-                          </div>
-                        </div>
-                      ) : null}
-
-                      {/* Inventory */}
-                      {(s.inventory || []).length > 0 ? (
-                        <table style={table}>
-                          <thead>
-                            <tr>
-                              <th style={th}>Item</th>
-                              <th style={{ ...th, width: 90 }}>Qty</th>
-                              <th style={{ ...th, width: 120 }}>Price</th>
-                              {isDM ? <th style={{ ...th, width: 120 }} /> : null}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {(s.inventory || []).map((it) => (
-                              <tr key={it.id}>
-                                <td style={td}>
-                                  {isDM ? (
-                                    <>
-                                      <input
-                                        style={input}
-                                        value={it.name}
-                                        onChange={(e) => updateItem(s.id, it.id, { name: e.target.value })}
-                                      />
-                                      <div style={{ marginTop: 8 }}>
-                                        <div style={label}>Notes</div>
-                                        <textarea
-                                          style={{ ...input, minHeight: 60 }}
-                                          value={it.notes}
-                                          onChange={(e) => updateItem(s.id, it.id, { notes: e.target.value })}
-                                        />
-                                      </div>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <div style={{ fontWeight: 700 }}>{it.name || "—"}</div>
-                                      {it.notes ? (
-                                        <div style={{ opacity: 0.75, marginTop: 4, whiteSpace: "pre-wrap" }}>{it.notes}</div>
-                                      ) : null}
-                                    </>
-                                  )}
-                                </td>
-
-                                <td style={td}>
-                                  {isDM ? (
-                                    <input
-                                      style={input}
-                                      type="number"
-                                      value={Number.isFinite(it.qty) ? it.qty : 0}
-                                      onChange={(e) => updateItem(s.id, it.id, { qty: Number(e.target.value) })}
-                                    />
-                                  ) : (
-                                    <div>{it.qty}</div>
-                                  )}
-                                </td>
-
-                                <td style={td}>
-                                  {isDM ? (
-                                    <input
-                                      style={input}
-                                      type="number"
-                                      step="0.01"
-                                      value={Number.isFinite(it.priceGp) ? it.priceGp : 0}
-                                      onChange={(e) => updateItem(s.id, it.id, { priceGp: Number(e.target.value) })}
-                                    />
-                                  ) : (
-                                    <div>{formatGp(it.priceGp)}</div>
-                                  )}
-                                </td>
-
-                                {isDM ? (
-                                  <td style={td}>
-                                    <button style={button} onClick={() => removeItem(s.id, it.id)} disabled={saving}>
-                                      Remove
-                                    </button>
-                                  </td>
-                                ) : null}
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      ) : (
-                        <div style={{ marginTop: 10, opacity: 0.75 }}>
-                          {isDM ? "No items yet. Click “+ Item” to add inventory." : "No inventory listed."}
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : null}
             </div>
