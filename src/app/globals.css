@@ -57,14 +57,14 @@ a:hover {
   max-width: 1100px;
 }
 
-/* ---- Stonecross Background (global) ---- */
+/* ---- Stonecross Background (global, full-page + full-scroll) ---- */
 html,
 body {
+  height: 100%;
   min-height: 100%;
 }
 
-body {
-  /* Layered gradients = depth without distraction */
+html {
   background:
     radial-gradient(1200px 700px at 20% 10%, rgba(120, 80, 255, 0.18), rgba(0, 0, 0, 0) 60%),
     radial-gradient(900px 600px at 80% 20%, rgba(255, 185, 80, 0.12), rgba(0, 0, 0, 0) 55%),
@@ -72,10 +72,15 @@ body {
     linear-gradient(180deg, #07070a 0%, #050508 40%, #030305 100%);
   background-attachment: fixed;
   background-repeat: no-repeat;
+  background-color: #030305; /* fallback */
+}
+
+body {
+  background: transparent;
   color: #fff;
 }
 
-/* Subtle grain overlay (pure CSS) */
+
 body::before {
   content: "";
   position: fixed;
@@ -94,7 +99,6 @@ body::before {
   z-index: 0;
 }
 
-/* Keep app content above overlay */
 body > * {
   position: relative;
   z-index: 1;
